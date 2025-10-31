@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "cross-env NODE_OPTIONS='--max-old-space-size=4096' nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "build": "tsc",
-    "start": "cross-env NODE_OPTIONS='--max-old-space-size=4096' node dist/index.js"
+    "start": "cross-env NODE_OPTIONS='--max-old-space-size=4096' node dist/index.js",
+    "seed:admin": "ts-node scripts/seedAdmin.ts"
   },
   "keywords": [],
   "author": "",
