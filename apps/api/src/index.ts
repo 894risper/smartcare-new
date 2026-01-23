@@ -54,15 +54,13 @@ import sendEmailRouter from './routes/send-email';
 import adminDoctorsRoutes from './routes/adminDoctors';
 import adminPatientsRoutes from './routes/adminPatients';
 import adminDoctorAssignmentsRouter from './routes/admin/doctorAssignments';
+import patientDoctorAssignmentRoutes from './routes/patientDoctorAssignment';
+
+
+import { startKeepAliveService ,stopKeepAliveService} from './services/keepAlive.service';
 
 dotenv.config();
 
-console.log('🔧 Initializing SmartCare API...');
-console.log('📍 PORT from env:', process.env.PORT || 'NOT SET (will use 10000)');
-console.log('🌍 NODE_ENV:', process.env.NODE_ENV || 'development');
-console.log('🔗 MONGODB_URI:', process.env.MONGODB_URI ? 'SET ✓' : 'NOT SET ✗');
-console.log('🔑 JWT_SECRET:', process.env.JWT_SECRET ? 'SET ✓' : 'NOT SET ✗');
-console.log('🔑 SESSION_SECRET:', process.env.SESSION_SECRET ? 'SET ✓' : 'NOT SET ✗');
 
 const app = express();
 
@@ -113,7 +111,7 @@ app.use(cors({
       return callback(null, true);
     }
     
-    console.log('⚠️  CORS blocked origin:', origin);
+    
     callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -139,7 +137,7 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // SESSION SETUP
 if (!process.env.SESSION_SECRET) {
-  console.error('❌ SESSION_SECRET is not set!');
+  
 }
 
 app.use(
@@ -190,8 +188,6 @@ app.get('/health', (_req, res) => {
   });
 });
 
-console.log('📋 Registering routes...');
-
 // Register all routes
 app.use('/api/auth', authRoute);
 app.use('/api/login', loginRoute);
@@ -218,6 +214,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/doctor/me', doctorMeRoutes);
 app.use("/api/patients/search", patientSearchRoute);
 app.use("/api/doctor/assign-patient", assignPatientRoute);
+app.use('/api/patient', patientDoctorAssignmentRoutes);
 app.use('/api/patient', patientRequestsRoute);
 app.use('/api/doctor', doctorRequestsRoute);
 app.use('/api/doctor/manage', doctorManagementRoutes);
@@ -237,7 +234,10 @@ app.use('/api/relative-setup', relativeSetupRoutes);
 app.use('/api/relative', relativePatientRouter);
 app.use('/api', sendEmailRouter);
 
-console.log('✅ Routes registered');
+
+
+console.log('Routes registered');
+
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -249,71 +249,71 @@ app.use('*', (req, res) => {
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('❌ Server Error:', err);
+  console.error('Server Error:', err);
   res.status(500).json({
     message: 'Internal server error',
     error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
   });
 });
 
-console.log(`🚀 Starting server on 0.0.0.0:${PORT}...`);
+console.log(`Starting server on 0.0.0.0:${PORT}...`);
 
 // Start server FIRST, then connect to MongoDB
 const server = app.listen(PORT, "0.0.0.0", () => {
   const memUsage = process.memoryUsage();
-  console.log(`✅ Server is running on http://0.0.0.0:${PORT}`);
-  console.log(`📱 Health check: http://0.0.0.0:${PORT}/health`);
-  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 CORS enabled for allowed origins`);
-  console.log(`💾 Memory: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memUsage.rss / 1024 / 1024)}MB RSS`);
+ 
   
   // Connect to MongoDB AFTER server starts
   connectMongoDB()
     .then(() => {
       console.log('✅ MongoDB connected successfully');
+      startKeepAliveService();
     })
     .catch((err) => {
-      console.error('❌ MongoDB connection failed:', err);
-      console.log('⚠️  Server running without database connection');
+      console.error(' MongoDB connection failed:', err);
+     
     });
+    
 });
 
 // Handle server errors
 server.on('error', (err: any) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use`);
+    console.error(` Port ${PORT} is already in use`);
     process.exit(1);
   } else {
-    console.error('❌ Server error:', err);
+    console.error('Server error:', err);
     process.exit(1);
   }
 });
 
 // Graceful shutdown
+
 process.on('SIGTERM', () => {
-  console.log('🛑 SIGTERM received, shutting down gracefully');
+stopKeepAliveService();
   server.close(() => {
-    console.log('✅ Server closed');
+   
     process.exit(0);
   });
 });
 
 process.on('SIGINT', () => {
-  console.log('🛑 SIGINT received, shutting down gracefully');
+  
+  stopKeepAliveService();
   server.close(() => {
-    console.log('✅ Server closed');
+    
     process.exit(0);
   });
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err);
+  console.error('Uncaught Exception:', err);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
 

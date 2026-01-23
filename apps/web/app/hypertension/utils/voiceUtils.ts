@@ -152,6 +152,68 @@ export const convertWebmToWav = async (webmBlob: Blob): Promise<Blob> => {
   }
 };
 
+// Swahili number word mappings
+const swahiliNumberWords: { [key: string]: number } = {
+  // Units (0-10)
+  'sifuri': 0, 'moja': 1, 'mbili': 2, 'tatu': 3, 'nne': 4, 'tano': 5,
+  'sita': 6, 'saba': 7, 'nane': 8, 'tisa': 9, 'kumi': 10,
+  
+  // Teens (11-19)
+  'kumi na moja': 11, 'kumi na mbili': 12, 'kumi na tatu': 13, 'kumi na nne': 14,
+  'kumi na tano': 15, 'kumi na sita': 16, 'kumi na saba': 17, 'kumi na nane': 18,
+  'kumi na tisa': 19,
+  
+  // Tens (20-90)
+  'ishirini': 20, 'thelathini': 30, 'arobaini': 40, 'hamsini': 50,
+  'sitini': 60, 'sabini': 70, 'themanini': 80, 'tisini': 90,
+  
+  // Hundreds
+  'mia': 100, 'mia mbili': 200, 'mia tatu': 300, 'mia nne': 400, 'mia tano': 500,
+  'mia sita': 600
+};
+
+const parseSwahiliNumber = (text: string): number | null => {
+  const normalized = text.toLowerCase().trim();
+  
+  // Check for exact phrase matches first (handles "kumi na tano", etc.)
+  if (swahiliNumberWords[normalized] !== undefined) {
+    return swahiliNumberWords[normalized];
+  }
+  
+  // Parse composite numbers (e.g., "hamsini na tano" = 50 + 5 = 55)
+  const words = normalized.split(/\s+/);
+  let total = 0;
+  let currentNumber = 0;
+  
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    
+    // Skip "na" (and)
+    if (word === 'na') continue;
+    
+    // Check if it's a known number word
+    if (word !== undefined && swahiliNumberWords[word] !== undefined) {
+      const value = swahiliNumberWords[word];
+      
+      // If it's a hundred, multiply the current number
+      if (value === 100) {
+        if (currentNumber === 0) currentNumber = 1;
+        total += currentNumber * 100;
+        currentNumber = 0;
+      } else if (value >= 10) {
+        // It's a tens value
+        currentNumber = value;
+      } else {
+        // It's a units value
+        currentNumber += value;
+      }
+    }
+  }
+  
+  total += currentNumber;
+  return total > 0 ? total : null;
+};
+
 export const parseSpokenInput = (text: string, languageValue: string, fieldType?: 'number' | 'select'): { 
   type: 'number' | 'text' | 'skip' | 'yes' | 'no' | 'cancel' | 'unknown'; 
   value?: number; 
@@ -159,55 +221,83 @@ export const parseSpokenInput = (text: string, languageValue: string, fieldType?
 } => {
   const lowerText = text.toLowerCase().trim();
   
-  // Check for yes/no/cancel commands
+  console.log(`🔊 Parsing spoken input: "${text}" -> "${lowerText}"`);
+  console.log(`   Language: ${languageValue}, Field type: ${fieldType}`);
+  
+  // Define command words
   const yesWords = languageValue === "sw" 
     ? ['ndio', 'yes', 'correct', 'right', 'true', 'sawa', 'kubali', 'ehe', 'ndiyo']
     : ['yes', 'correct', 'right', 'true', 'yeah', 'yep', 'ye', 'y'];
   
   const noWords = languageValue === "sw"
-    ? ['hapana', 'no', 'wrong', 'incorrect', 'false', 'jaribu tena', 'siyo', 'si', 'la']
-    : ['no', 'wrong', 'incorrect', 'false', 'nope', 'try again', 'nah'];
+    ? ['hapana', 'wrong', 'incorrect', 'false', 'jaribu tena', 'siyo', 'si', 'la']
+    : ['wrong', 'incorrect', 'false', 'nope', 'try again', 'nah'];
   
   const cancelWords = languageValue === "sw"
     ? ['batilisha', 'cancel', 'stop', 'quit', 'end', 'simamisha', 'acha']
     : ['cancel', 'stop', 'quit', 'end', 'cease'];
   
   const skipWords = languageValue === "sw" 
-    ? ['ruka', 'pass', 'next', 'none', 'sina', 'skip']
-    : ['skip', 'pass', 'next', 'none', "don't know", 'not sure'];
+    ? ['ruka', 'pass', 'next', 'sina', 'skip']
+    : ['skip', 'pass', 'next', "don't know", 'not sure'];
   
-  // Check for confirmation/cancellation first
+  // Priority 1: Check for confirmation/cancellation commands
   if (yesWords.some(word => lowerText.includes(word))) {
+    console.log('   ✅ Detected: YES command');
     return { type: 'yes' };
   }
   if (noWords.some(word => lowerText.includes(word))) {
+    console.log('   ✅ Detected: NO command');
     return { type: 'no' };
   }
   if (cancelWords.some(word => lowerText.includes(word))) {
+    console.log('   ✅ Detected: CANCEL command');
     return { type: 'cancel' };
   }
   
-  // Then check for skip
+  // Priority 2: Check for skip (but NOT "none" - that's a valid option)
   if (skipWords.some(word => lowerText.includes(word))) {
+    console.log('   ✅ Detected: SKIP command');
     return { type: 'skip' };
   }
   
-  // Check for numbers
-  if (fieldType === 'number' || fieldType === 'select') {
+  // Priority 3: For select fields, return as text (to be mapped to options)
+  if (fieldType === 'select') {
+    console.log(`   📝 Select field - returning as text: "${lowerText}"`);
+    return { type: 'text', textValue: lowerText };
+  }
+  
+  // Priority 4: Parse numbers (for number fields)
+  if (fieldType === 'number') {
+    // Try Swahili number words first (if Swahili language)
+    if (languageValue === 'sw') {
+      const swahiliNum = parseSwahiliNumber(lowerText);
+      if (swahiliNum !== null) {
+        console.log(`   🔢 Parsed Swahili number: ${swahiliNum}`);
+        return { type: 'number', value: swahiliNum };
+      }
+    }
+    
+    // Try extracting digits (works for both languages)
     const numbers = lowerText.match(/\d+/g);
     if (numbers && numbers.length > 0) {
       const number = parseInt(numbers[0], 10);
-      if (!isNaN(number) && number > 0) {
+      if (!isNaN(number) && number >= 0) {
+        console.log(`   🔢 Parsed digit number: ${number}`);
         return { type: 'number', value: number };
       }
     }
+    
+    console.log('   ❌ No valid number found');
   }
   
-  // For text or select fields
-  if (fieldType === 'select' || lowerText.length > 0) {
+  // Priority 5: Fallback to text if not empty
+  if (lowerText.length > 0) {
+    console.log(`   📝 Fallback to text: "${lowerText}"`);
     return { type: 'text', textValue: lowerText };
   }
 
+  console.log('   ❓ Unknown input');
   return { type: 'unknown' };
 };
 
@@ -235,71 +325,156 @@ const checkIfClearMatch = (spokenText: string, fieldName: string, currentLanguag
 
 export const mapSpokenToOption = (spokenText: string, fieldName: string, currentLanguage: any): string | null => {
   const keywords = currentLanguage.optionKeywords as any;
+  const lowerSpoken = spokenText.toLowerCase().trim();
   
-  // For hypertension-specific fields
-  if (fieldName === 'activityType') {
-    const options = [
-      { dbValue: 'none', displayValue: 'No recent activity' },
-      { dbValue: 'exercise', displayValue: 'Exercise/Workout' },
-      { dbValue: 'walking', displayValue: 'Walking' },
-      { dbValue: 'eating', displayValue: 'Eating/Meal' },
-      { dbValue: 'stress', displayValue: 'Stress/Anxiety' },
-      { dbValue: 'sleep_deprivation', displayValue: 'Sleep Deprivation' },
-      { dbValue: 'caffeine', displayValue: 'Caffeine Intake' },
-      { dbValue: 'medication', displayValue: 'Recent Medication' },
-      { dbValue: 'illness', displayValue: 'Illness/Fever' },
-      { dbValue: 'other', displayValue: 'Other' }
+  console.log(`🔍 Mapping spoken text: "${lowerSpoken}" for field: ${fieldName}`);
+  console.log(`📋 Current language keywords:`, keywords?.[fieldName]);
+  
+  // ✅ Handle glucose measurement context field
+  if (fieldName === 'context') {
+    console.log(`🔍 Checking context field for: "${lowerSpoken}"`);
+    
+    // ALWAYS check BOTH English AND Swahili keywords, regardless of selected language
+    const allFastingKeywords = [
+      'fasting', 'kifunga', 'before eating', 'before meal', 'kabla ya chakula',
+      'hungry', 'empty stomach', 'njaa', 'sijala', 'asubuhi kabla', 
+      'morning before', "haven't eaten", 'kabla'
     ];
     
-    const lowerSpoken = spokenText.toLowerCase().trim();
+    const allPostMealKeywords = [
+      'post-meal', 'post meal', 'after eating', 'after meal', 'baada ya chakula',
+      'just ate', 'finished eating', 'after food', 'baada', 'tumekula',
+      'nimemaliza', 'meal', 'chakula', 'mlo', 'nimekula'
+    ];
     
-    // Try keyword matching first
-    if (keywords && keywords[fieldName]) {
-      for (const option of options) {
-        if (keywords[fieldName][option.dbValue]) {
-          for (const keyword of keywords[fieldName][option.dbValue]) {
-            const normalizedKeyword = keyword.toLowerCase().trim();
-            if (lowerSpoken.includes(normalizedKeyword)) {
-              return option.dbValue;
-            }
-          }
+    const allRandomKeywords = [
+      'random', 'any time', 'anytime', 'just now', 'right now', 'casual',
+      'whenever', 'ovyo ovyo', 'ovyo', 'wakati wowote', 'sasa hivi', 
+      'sasa', 'tu', 'wakati'
+    ];
+    
+    // Check fasting keywords (exact match first, then partial)
+    for (const keyword of allFastingKeywords) {
+      const normalizedKeyword = keyword.toLowerCase().trim();
+      // Exact match
+      if (lowerSpoken === normalizedKeyword) {
+        console.log(`✅ EXACT match to: fasting (via keyword: "${keyword}")`);
+        return 'fasting';
+      }
+      // Partial match (contains)
+      if (lowerSpoken.includes(normalizedKeyword)) {
+        console.log(`✅ PARTIAL match to: fasting (via keyword: "${keyword}")`);
+        return 'fasting';
+      }
+    }
+    
+    // Check post-meal keywords (exact match first, then partial)
+    for (const keyword of allPostMealKeywords) {
+      const normalizedKeyword = keyword.toLowerCase().trim();
+      // Exact match
+      if (lowerSpoken === normalizedKeyword) {
+        console.log(`✅ EXACT match to: post-meal (via keyword: "${keyword}")`);
+        return 'post-meal';
+      }
+      // Partial match (contains)
+      if (lowerSpoken.includes(normalizedKeyword)) {
+        console.log(`✅ PARTIAL match to: post-meal (via keyword: "${keyword}")`);
+        return 'post-meal';
+      }
+    }
+    
+    // Check random keywords (exact match first, then partial)
+    for (const keyword of allRandomKeywords) {
+      const normalizedKeyword = keyword.toLowerCase().trim();
+      // Exact match
+      if (lowerSpoken === normalizedKeyword) {
+        console.log(`✅ EXACT match to: random (via keyword: "${keyword}")`);
+        return 'random';
+      }
+      // Partial match (contains)
+      if (lowerSpoken.includes(normalizedKeyword)) {
+        console.log(`✅ PARTIAL match to: random (via keyword: "${keyword}")`);
+        return 'random';
+      }
+    }
+    
+    console.log(`❌ No context match found for: "${lowerSpoken}"`);
+    console.log(`   Checked ${allFastingKeywords.length + allPostMealKeywords.length + allRandomKeywords.length} keywords total`);
+    return null;
+  }
+  
+  // For hypertension activity type field
+  if (fieldName === 'activityType') {
+    console.log(`🔍 Checking activity type for: "${lowerSpoken}"`);
+    
+    // ALWAYS check BOTH English AND Swahili keywords
+    const activityKeywords = {
+      none: ['none', 'no', 'nothing', 'no activity', 'rest', 'inactive', 'hapuna', 'hakuna', 'hamna', 'sina', 'chacho'],
+      exercise: ['exercise', 'workout', 'gym', 'fitness', 'training', 'zoezi', 'mazoezi', 'mbio'],
+      walking: ['walking', 'walk', 'stroll', 'tembea', 'matembezi', 'kutembea'],
+      eating: ['eating', 'meal', 'food', 'just ate', 'breakfast', 'lunch', 'dinner', 'kula', 'chakula', 'mlo', 'tumekula'],
+      stress: ['stress', 'stressed', 'anxiety', 'worried', 'tense', 'pressure', 'mkazo', 'msongo', 'wasiwasi'],
+      sleep_deprivation: ['sleep', 'sleepy', 'tired', 'rest', 'deprivation', 'usingizi', 'kulala', 'singilizi'],
+      caffeine: ['caffeine', 'coffee', 'tea', 'energy drink', 'kafeini', 'kahawa', 'chai'],
+      medication: ['medication', 'medicine', 'pills', 'drugs', 'tablet', 'dawa', 'madawa', 'vidonge'],
+      illness: ['illness', 'sick', 'fever', 'cold', 'flu', 'unwell', 'ugonjwa', 'homa', 'mafua'],
+      other: ['other', 'another', 'nyingine']
+    };
+    
+    // Check all activity types (exact match first, then partial)
+    for (const [dbValue, keywordList] of Object.entries(activityKeywords)) {
+      for (const keyword of keywordList) {
+        const normalizedKeyword = keyword.toLowerCase().trim();
+        // Exact match
+        if (lowerSpoken === normalizedKeyword) {
+          console.log(`✅ EXACT match to: ${dbValue} (via keyword: "${keyword}")`);
+          return dbValue;
+        }
+        // Partial match
+        if (lowerSpoken.includes(normalizedKeyword)) {
+          console.log(`✅ PARTIAL match to: ${dbValue} (via keyword: "${keyword}")`);
+          return dbValue;
         }
       }
     }
     
-    // Enhanced fallback matching
-    if (lowerSpoken.includes('none') || lowerSpoken.includes('no activity') || lowerSpoken.includes('not active')) {
-      return 'none';
-    }
-    if (lowerSpoken.includes('exercise') || lowerSpoken.includes('workout') || lowerSpoken.includes('gym')) {
-      return 'exercise';
-    }
-    if (lowerSpoken.includes('walking') || lowerSpoken.includes('walk') || lowerSpoken.includes('tembee')) {
-      return 'walking';
-    }
-    if (lowerSpoken.includes('eating') || lowerSpoken.includes('meal') || lowerSpoken.includes('chakula')) {
-      return 'eating';
-    }
-    if (lowerSpoken.includes('stress') || lowerSpoken.includes('anxiety') || lowerSpoken.includes('msongo')) {
-      return 'stress';
-    }
-    if (lowerSpoken.includes('sleep') || lowerSpoken.includes('deprivation') || lowerSpoken.includes('kulala')) {
-      return 'sleep_deprivation';
-    }
-    if (lowerSpoken.includes('caffeine') || lowerSpoken.includes('coffee') || lowerSpoken.includes('kahawa')) {
-      return 'caffeine';
-    }
-    if (lowerSpoken.includes('medication') || lowerSpoken.includes('medicine') || lowerSpoken.includes('dawa')) {
-      return 'medication';
-    }
-    if (lowerSpoken.includes('illness') || lowerSpoken.includes('fever') || lowerSpoken.includes('ugonjwa')) {
-      return 'illness';
-    }
-    if (lowerSpoken.includes('other') || lowerSpoken.includes('another') || lowerSpoken.includes('nyingine')) {
-      return 'other';
-    }
+    console.log(`❌ No activity type match found for: "${lowerSpoken}"`);
+    return null;
   }
   
+  // ✅ Handle intensity field
+  if (fieldName === 'intensity') {
+    console.log(`🔍 Checking intensity for: "${lowerSpoken}"`);
+    
+    // ALWAYS check BOTH English AND Swahili keywords
+    const intensityKeywords = {
+      light: ['light', 'easy', 'gentle', 'low', 'minimal', 'casual', 'slow', 'relaxed', 'nyepesi', 'rahisi', 'pole'],
+      moderate: ['moderate', 'medium', 'normal', 'regular', 'standard', 'average', 'wastani', 'kawaida'],
+      vigorous: ['vigorous', 'intense', 'hard', 'strenuous', 'heavy', 'strong', 'high', 'kali', 'ngumu']
+    };
+    
+    // Check all intensity levels (exact match first, then partial)
+    for (const [level, keywordList] of Object.entries(intensityKeywords)) {
+      for (const keyword of keywordList) {
+        const normalizedKeyword = keyword.toLowerCase().trim();
+        // Exact match
+        if (lowerSpoken === normalizedKeyword) {
+          console.log(`✅ EXACT match to: ${level} (via keyword: "${keyword}")`);
+          return level;
+        }
+        // Partial match
+        if (lowerSpoken.includes(normalizedKeyword)) {
+          console.log(`✅ PARTIAL match to: ${level} (via keyword: "${keyword}")`);
+          return level;
+        }
+      }
+    }
+    
+    console.log(`❌ No intensity match found for: "${lowerSpoken}"`);
+    return null;
+  }
+  
+  console.log(`❌ Unknown field: ${fieldName}`);
   return null;
 };
 
@@ -376,6 +551,7 @@ export const resumeVoiceMode = async (params: {
   }
 };
 
+// Simplified confirmation function
 export const askConfirmation = async (
   value: string | number, 
   fieldName: string, 
@@ -392,14 +568,12 @@ export const askConfirmation = async (
     ? value 
     : getDisplayValue(fieldName, value as string, currentLanguage);
   
+  // Simplified question
   const question = languageValue === "sw" 
-    ? `${displayValue}? Sema ndio au hapana.`
-    : `${displayValue}? Say yes or no.`;
+    ? `${displayValue}. Ndio au hapana?`
+    : `${displayValue}. Yes or no?`;
   
-  // Wait for confirmation question to finish speaking
   await handleSpeak(question);
-  
-  // Small delay to ensure speech completes
   await new Promise(resolve => setTimeout(resolve, 300));
   
   return new Promise(async (resolve) => {
@@ -472,7 +646,7 @@ export const askConfirmation = async (
             } else if (parsed.type === 'no') {
               resolve(false);
             } else if (parsed.type === 'cancel') {
-              resolve(false); // Treat cancel as no
+              resolve(false);
             } else if (parsed.type === 'number') {
               resolve(parsed.value === 1);
             } else if (parsed.type === 'text') {
@@ -489,18 +663,17 @@ export const askConfirmation = async (
               } else if (noWords.some(word => lowerText.includes(word))) {
                 resolve(false);
               } else {
-                // If unclear, assume no and ask again
                 resolve(false);
               }
             } else {
               resolve(false);
             }
           } else {
-            resolve(true); // Assume yes if no text returned
+            resolve(true);
           }
         } catch (error: any) {
           setVoiceModeState({ listening: false, status: "" });
-          resolve(true); // Assume yes on error
+          resolve(true);
         }
       };
 
@@ -510,7 +683,7 @@ export const askConfirmation = async (
         if (mediaRecorder.state === "recording") {
           mediaRecorder.stop();
         }
-      }, 3000);
+      }, 2500); // Reduced from 3000
 
     } catch (error) {
       setVoiceModeState({ listening: false, status: "" });
@@ -519,6 +692,35 @@ export const askConfirmation = async (
   });
 };
 
+const getOptionsList = (fieldName: string, currentLanguage: any): string[] => {
+  switch (fieldName) {
+    case 'activityType': {
+      const o = currentLanguage?.activityTypeOptions;
+      if (!o) return ['none', 'exercise', 'walking', 'eating', 'stress', 'sleep', 'caffeine', 'medication', 'illness'];
+      return [
+        o.none,
+        o.exercise,
+        o.walking,
+        o.eating,
+        o.stress,
+        o.sleep,
+        o.caffeine,
+        o.medication,
+        o.illness,
+        o.other
+      ].filter(Boolean);
+    }
+    case 'intensity': {
+      const o = currentLanguage?.intensityOptions;
+      if (!o) return ['light', 'moderate', 'vigorous'];
+      return [o.light, o.moderate, o.vigorous].filter(Boolean);
+    }
+    default:
+      return [];
+  }
+};
+
+// Simplified listenForField function
 export const listenForField = async (
   fieldName: string,
   fieldLabel: string,
@@ -552,24 +754,17 @@ export const listenForField = async (
 
   setVoiceModeState({ currentField: fieldName });
 
-  const fieldInstructionKey = fieldName as keyof typeof currentLanguage.fieldInstructions;
-  const instruction = currentLanguage.fieldInstructions?.[fieldInstructionKey] || 
-    (languageValue === "sw" ? "Tafadhali sema thamani" : "Please say the value");
-  
-  let finalInstruction = instruction;
-  if (isRequired) {
-    finalInstruction = languageValue === "sw" 
-      ? `${instruction.replace("Sema 'ruka'", "")}`
-      : `${instruction.replace("Say 'skip'", "")}`;
+  // Match diabetes voice UX: for selects, read out options list
+  let prompt = fieldLabel;
+  if (fieldType === 'select') {
+    const options = getOptionsList(fieldName, currentLanguage);
+    if (options.length > 0) {
+      prompt = `${fieldLabel}. ${options.join(', ')}.`;
+    }
   }
   
-  const announcement = `${fieldLabel}. ${finalInstruction}`;
-  
-  // IMPORTANT: Wait for speech to complete BEFORE starting recording
-  await handleSpeak(announcement);
-  
-  // Add small delay to ensure speech has finished
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await handleSpeak(prompt);
+  await new Promise(resolve => setTimeout(resolve, 300));
 
   while (pausedRef.current && voiceModeActiveRef.current) {
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -583,10 +778,9 @@ export const listenForField = async (
     try {
       isProcessingRef.current = true;
       
-      // Start listening AFTER speech is done
       setVoiceModeState({ 
         listening: true, 
-        status: languageValue === "sw" ? "Zungumza sasa" : "Speak now" 
+        status: languageValue === "sw" ? "Sema sasa" : "Speak now" 
       });
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -628,13 +822,13 @@ export const listenForField = async (
           const response = await fetch(`${API_URL}/api/python-speech/transcribe`, {
             method: "POST",
             body: formData,
-            signal: AbortSignal.timeout(10000)
+            signal: AbortSignal.timeout(8000) // Reduced from 10000
           });
 
           if (!response.ok) {
             setVoiceModeState({ listening: false, currentField: null, status: "" });
             isProcessingRef.current = false;
-            await handleSpeak(languageValue === "sw" ? "Jaribu tena." : "Try again.");
+            await handleSpeak(languageValue === "sw" ? "Rudi." : "Repeat.");
             resolve(null);
             return;
           }
@@ -647,17 +841,9 @@ export const listenForField = async (
           if (data.success && data.text) {
             const parsed = parseSpokenInput(data.text, languageValue, fieldType);
             
-            // Check for commands first
-            if (parsed.type === 'yes' || parsed.type === 'no' || parsed.type === 'cancel') {
-              // These are handled in the confirmation function
-              await handleSpeak(languageValue === "sw" ? "Sema thamani." : "Say the value.");
-              resolve(null);
-              return;
-            }
-            
             if (parsed.type === 'skip') {
               if (isRequired) {
-                await handleSpeak(languageValue === "sw" ? "Muhimu. Jaribu tena." : "Required. Try again.");
+                await handleSpeak(languageValue === "sw" ? "Rudi." : "Repeat.");
                 resolve(null);
               } else {
                 resolve('skip');
@@ -684,8 +870,8 @@ export const listenForField = async (
                   }
                 } else {
                   await handleSpeak(languageValue === "sw" 
-                    ? `${min} hadi ${max}. Jaribu tena.`
-                    : `${min} to ${max}. Try again.`);
+                    ? `Rudi. ${min} hadi ${max}.`
+                    : `Repeat. ${min} to ${max}.`);
                   resolve(null);
                 }
               } else {
@@ -720,21 +906,21 @@ export const listenForField = async (
                   }
                 }
               } else {
-                await handleSpeak(languageValue === "sw" ? "Jaribu tena." : "Try again.");
+                await handleSpeak(languageValue === "sw" ? "Rudi." : "Repeat.");
                 resolve(null);
               }
             } else {
-              await handleSpeak(languageValue === "sw" ? "Jaribu tena." : "Try again.");
+              await handleSpeak(languageValue === "sw" ? "Rudi." : "Repeat.");
               resolve(null);
             }
           } else {
-            await handleSpeak(languageValue === "sw" ? "Jaribu tena." : "Try again.");
+            await handleSpeak(languageValue === "sw" ? "Rudi." : "Repeat.");
             resolve(null);
           }
         } catch (error: any) {
           setVoiceModeState({ listening: false, currentField: null, status: "" });
           isProcessingRef.current = false;
-          await handleSpeak(languageValue === "sw" ? "Hitilafu. Jaribu tena." : "Error. Try again.");
+          await handleSpeak(languageValue === "sw" ? "Rudi." : "Repeat.");
           resolve(null);
         }
       };
@@ -745,7 +931,7 @@ export const listenForField = async (
         if (mediaRecorder.state === "recording" && voiceModeActiveRef.current) {
           mediaRecorder.stop();
         }
-      }, 4000);
+      }, 3500); // Reduced from 4000
 
     } catch (error) {
       setVoiceModeState({ listening: false, currentField: null, status: "" });
@@ -792,15 +978,26 @@ export const startVoiceMode = async (params: {
   voiceModeActiveRef.current = true;
   pausedRef.current = false;
   
+  // Simplified welcome - FIXED: Removed duplicate ternary operator
   const welcome = languageValue === "sw"
-    ? "Karibu. Tutaanza na shinikizo la damu."
-    : "Welcome. Let's start with blood pressure.";
+    ?"Systolic."
+    :"Systolic.";
+
   
-  // Ensure welcome message completes before starting
+
+    
+
+  
   await handleSpeak(welcome);
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise(resolve => setTimeout(resolve, 300));
   
   const allFields = [
+    { 
+      name: "context", 
+      label: currentLanguage.contextLabel || "Glucose Measurement Context",
+      type: "select" as const,
+      required: false
+    },
     { 
       name: "systolic", 
       label: currentLanguage.systolicLabel || "Systolic Pressure",
@@ -903,7 +1100,6 @@ export const startVoiceMode = async (params: {
 
       if (result === 'skip') {
         if (!field.required) {
-          toast.success(`⏭️ ${field.label}: ${currentLanguage.skip || "Skipped"}`, { duration: 2000 });
           validInput = true;
           break;
         } else {
@@ -918,8 +1114,6 @@ export const startVoiceMode = async (params: {
         ? result 
         : getDisplayValue(field.name, result as string, currentLanguage);
       
-      toast.success(`✅ ${field.label}: ${displayValue}`, { duration: 2000 });
-      
       if (!voiceModeState.muted && voiceModeActiveRef.current) {
         await handleSpeak(languageValue === "sw" ? `${displayValue}` : `${displayValue}`);
       }
@@ -930,10 +1124,8 @@ export const startVoiceMode = async (params: {
     if (!validInput && voiceModeActiveRef.current) {
       if (field.required) {
         const manualMsg = languageValue === "sw"
-          ? `Weka ${field.label} mwenyewe.`
-          : `Enter ${field.label} manually.`;
-        
-        toast.error(`❌ ${manualMsg}`, { duration: 4000 });
+          ? `Tafadhali weka ${field.label} mwenyewe.`
+          : `Please enter ${field.label} manually.`;
         
         if (!voiceModeState.muted) {
           await handleSpeak(manualMsg);
@@ -953,17 +1145,16 @@ export const startVoiceMode = async (params: {
     }
 
     if (voiceModeActiveRef.current) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 300)); // Reduced delay
     }
   }
 
   if (voiceModeActiveRef.current) {
     const complete = languageValue === "sw"
-      ? "Asante! Vipimo vya shinikizo la damu vimekamilika."
-      : "Thank you! Blood pressure measurements are complete.";
+      ? "Imekamilika."
+      : "Complete.";
     
     await handleSpeak(complete);
-    toast.success(currentLanguage.voiceComplete || "Voice entry complete", { duration: 3000 });
   }
   
   setVoiceModeState({ 
@@ -986,6 +1177,7 @@ export const stopVoiceMode = (params: {
   setVoiceModeState: (state: Partial<VoiceModeState>) => void;
   handleSpeak: (text: string) => Promise<void>;
   isMuted: boolean;
+  languageValue: string; // ADD THIS PARAMETER
 }) => {
   const {
     voiceModeActiveRef,
@@ -994,7 +1186,8 @@ export const stopVoiceMode = (params: {
     currentLanguage,
     setVoiceModeState,
     handleSpeak,
-    isMuted
+    isMuted,
+    languageValue // ADD THIS DESTRUCTURING
   } = params;
 
   stopCurrentSpeech();
@@ -1019,6 +1212,6 @@ export const stopVoiceMode = (params: {
   });
   
   if (!isMuted) {
-    handleSpeak(currentLanguage.voiceCancelled || "Voice mode stopped").catch(() => {});
+    handleSpeak(languageValue === "sw" ? "Imezimwa." : "Stopped.").catch(() => {});
   }
 };
