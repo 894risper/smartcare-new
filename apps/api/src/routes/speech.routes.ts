@@ -50,7 +50,7 @@ interface HealthResponse {
 // Health check endpoint
 router.get('/health', async (req: Request, res: Response) => {
   try {
-    console.log('🔍 Checking Python service health at:', `${PYTHON_SERVICE_URL}/health`);
+    
     const response = await axios.get(`${PYTHON_SERVICE_URL}/health`);
     
     const healthResponse: HealthResponse = {
@@ -58,10 +58,10 @@ router.get('/health', async (req: Request, res: Response) => {
       pythonService: response.data,
     };
     
-    console.log('✅ Python service health:', response.data);
+   
     res.json(healthResponse);
   } catch (error: any) {
-    console.error('❌ Python service health check failed:', error.message);
+    console.error(' Python service health check failed:', error.message);
     const errorResponse: HealthResponse = {
       status: 'error',
       message: 'Python service unavailable',
@@ -88,7 +88,7 @@ router.post('/transcribe', upload.single('audio'), async (req: Request, res: Res
     // Get language from request body (sent as form field)
     const language = req.body.language || 'en-US';
     
-    console.log('📁 Received audio file:', {
+    console.log('Received audio file:', {
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
       size: req.file.size,
@@ -105,8 +105,7 @@ router.post('/transcribe', upload.single('audio'), async (req: Request, res: Res
     // Add language to form data
     formData.append('language', language);
 
-    console.log('🎯 Forwarding to Python service:', `${PYTHON_SERVICE_URL}/transcribe`, 'with language:', language);
-
+    
     // Forward to Python service
     const response = await axios.post<TranscriptionResponse>(
       `${PYTHON_SERVICE_URL}/transcribe`,
@@ -119,7 +118,7 @@ router.post('/transcribe', upload.single('audio'), async (req: Request, res: Res
       }
     );
 
-    console.log('✅ Python service response:', response.data);
+    console.log(' Python service response:', response.data);
 
     // Clean up uploaded file
     fs.unlinkSync(filePath);
@@ -135,7 +134,7 @@ router.post('/transcribe', upload.single('audio'), async (req: Request, res: Res
       fs.unlinkSync(filePath);
     }
 
-    console.error('❌ Transcription error:', {
+    console.error(' Transcription error:', {
       message: error.message,
       response: error.response?.data,
       status: error.response?.status
@@ -161,7 +160,7 @@ router.post('/synthesize', express.json(), async (req: Request, res: Response) =
       });
     }
 
-    console.log('🔊 Text to speech request:', { text, language });
+    console.log(' Text to speech request:', { text, language });
 
     // Forward to Python service
     const response = await axios.post(
@@ -176,13 +175,13 @@ router.post('/synthesize', express.json(), async (req: Request, res: Response) =
       }
     );
 
-    console.log('✅ Synthesis response received');
+    console.log('Synthesis response received');
 
     // Stream the audio back to client (MP3 from gTTS)
     res.setHeader('Content-Type', 'audio/mpeg');
     response.data.pipe(res);
   } catch (error: any) {
-    console.error('❌ Synthesis error:', error);
+    console.error(' Synthesis error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to synthesize speech',

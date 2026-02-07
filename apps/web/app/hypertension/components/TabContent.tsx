@@ -2,8 +2,8 @@ import React, { Dispatch, SetStateAction } from "react";
 import HypertensionAlert from "../../components/hypertension/alert";
 import VitalsWithActivityInput from "./VitalsWithActivityInput";
 import VoiceControlPanel from "./VoiceControlPanel";
-import HealthTrends from "./HealthTrends";
-import HypertensionRiskAssessment from "./HypertensionRiskAssessment";
+
+
 import HealthTrendsAndRiskTab from "./tabs/HealthTrendsAndRiskTab";
 import DoctorManagement from "../../components/DoctorManagement";
 import NearbyClinics from "./NearbyClinics";
@@ -13,6 +13,7 @@ import LifestyleAssessment from "./LifestyleAssessment";
 import DietRecommendations from "./DietRecommendations";
 import type { LifestyleData } from "./LifestyleAssessment";
 import Maps from "../../../app/components/Map"
+import PatientAppointments from "../../../app/components/PatientAppointments";
 import { useTranslation } from "../../../lib/hypertension/useTranslation";
 
 interface TabContentProps {
@@ -52,6 +53,10 @@ const TabContent: React.FC<TabContentProps> = ({
   onRegenerateDiet,
   patient
 }) => {
+  const sectionCardClass =
+    "bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-emerald-100/60 overflow-hidden";
+  const sectionBodyClass = "p-5 sm:p-6";
+
   const computeAge = (dob?: string) => {
     if (!dob) return undefined;
     const birth = new Date(dob);
@@ -67,6 +72,7 @@ const TabContent: React.FC<TabContentProps> = ({
     case 'vitals':
       return (
         <>
+        
           <HypertensionAlert refreshToken={alertRefreshToken} />
           <VitalsWithActivityInput onAfterSave={() => setAlertRefreshToken(Date.now())} />
           
@@ -76,8 +82,7 @@ const TabContent: React.FC<TabContentProps> = ({
     case 'health-trends':
       return (
       <>
-        <HealthTrends vitals={vitals} />
-          <HypertensionRiskAssessment vitals={vitals} />
+       
         <HealthTrendsAndRiskTab
           patient={patient}
           patientVitals={vitals}
@@ -88,7 +93,16 @@ const TabContent: React.FC<TabContentProps> = ({
     case 'doctor':
       return (
         <>
-          <DoctorManagement condition="hypertension" />
+          <div className={sectionCardClass}>
+            <div className={sectionBodyClass}>
+              <DoctorManagement condition="hypertension" />
+            </div>
+          </div>
+          <div className={`${sectionCardClass} mt-6`}>
+            <div className={sectionBodyClass}>
+              {patient && <PatientAppointments patientId={patient._id} />}
+            </div>
+          </div>
           {/* <NearbyClinics /> */}
         </>
       );
@@ -96,11 +110,15 @@ const TabContent: React.FC<TabContentProps> = ({
     case 'medicine':
       return (
         <>
-          <div className="shadow-lg bg-white w-full max-w-4xl rounded-lg px-6 py-6 mb-6">
-            <MedicationAnalysisPage />
+          <div className={`${sectionCardClass} mb-6`}>
+            <div className={sectionBodyClass}>
+              <MedicationAnalysisPage />
+            </div>
           </div>
-          <div className="shadow-lg bg-white w-full max-w-4xl rounded-lg px-6 py-6 mb-6">
-            <MedicationReminders />
+          <div className={`${sectionCardClass} mb-6`}>
+            <div className={sectionBodyClass}>
+              <MedicationReminders />
+            </div>
           </div>
         </>
       );
@@ -122,18 +140,22 @@ const TabContent: React.FC<TabContentProps> = ({
             loadingAI={loadingAI}
             onRegenerateLifestyle={onRegenerateLifestyle}
             loadingRegenerate={regeneratingLifestyle}
+            patientName={patient?.fullName}
           />
-          <div className="shadow-lg bg-white w-full max-w-4xl rounded-lg px-6 py-6 mb-6">
-            <DietRecommendations 
-              dietData={dietData} 
-              loading={dietLoading} 
-              onRegenerate={onRegenerateDiet}
-              patient={patient ? {
-                age: computeAge(patient?.dob),
-                weight: patient?.weight,
-                gender: patient?.gender
-              } : undefined}
-            />
+          <div className={`${sectionCardClass} mb-6`}>
+            <div className={sectionBodyClass}>
+              <DietRecommendations 
+                dietData={dietData} 
+                loading={dietLoading} 
+                onRegenerate={onRegenerateDiet}
+                patient={patient ? {
+                  name: patient?.fullName,
+                  age: computeAge(patient?.dob),
+                  weight: patient?.weight,
+                  gender: patient?.gender
+                } : undefined}
+              />
+            </div>
           </div>
         </>
       );

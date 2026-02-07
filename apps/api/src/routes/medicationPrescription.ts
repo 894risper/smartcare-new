@@ -21,12 +21,47 @@ const authenticateUser = (req: any, res: any, next: any) => {
     req.userEmail = decoded.email;
     req.userRole = decoded.role;
 
-    console.log("✅ Authenticated user:", decoded.userId, "Role:", decoded.role);
+    
     next();
   } catch (error) {
     console.error("❌ Token verification failed:", error);
     return res.status(401).json({ message: "Invalid token" });
   }
+};
+
+// Helper function to calculate end date
+const calculateEndDate = (startDate: string | Date, duration: string): Date | null => {
+  if (!startDate || !duration || duration.toLowerCase().trim() === 'ongoing') {
+    return null;
+  }
+
+  const start = new Date(startDate);
+  
+  if (isNaN(start.getTime())) {
+    return null;
+  }
+  
+  const durationLower = duration.toLowerCase();
+  const match = durationLower.match(/(\d+)/);
+  
+  if (!match || !match[1]) return null;
+
+  const value = parseInt(match[1], 10);
+  if (isNaN(value)) return null;
+
+  if (durationLower.includes('day')) {
+    start.setDate(start.getDate() + value);
+  } else if (durationLower.includes('week')) {
+    start.setDate(start.getDate() + (value * 7));
+  } else if (durationLower.includes('month')) {
+    start.setMonth(start.getMonth() + value);
+  } else if (durationLower.includes('year')) {
+    start.setFullYear(start.getFullYear() + value);
+  } else {
+    return null;
+  }
+
+  return start;
 };
 
 // POST /api/medications/prescribe - Doctor prescribes medication to patient
@@ -40,7 +75,9 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       duration,
       instructions,
       reminders,
-      startDate
+      startDate,
+      patientAllergies,
+      potentialSideEffects
     } = req.body;
 
     // Check if user is a doctor
@@ -59,10 +96,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       });
     }
 
-    console.log("=== PRESCRIBING MEDICATION ===");
-    console.log("Doctor ID:", req.userId);
-    console.log("Patient ID:", patientId);
-    console.log("Medication:", medicationName);
+    
 
     await connectMongoDB();
 
@@ -75,6 +109,10 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       });
     }
 
+    // Calculate end date
+    const medStartDate = startDate || new Date();
+    const endDate = calculateEndDate(medStartDate, duration || 'Ongoing');
+
     // Create new medication prescription
     const medication = new MedicationModel({
       patientId,
@@ -84,9 +122,12 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       duration: duration || 'Ongoing',
       instructions: instructions || '',
       reminders: reminders || [],
-      startDate: startDate || new Date(),
+      startDate: medStartDate,
+      endDate: endDate,
       prescribedBy: req.userId,
-      status: 'active'
+      status: 'active',
+      patientAllergies: patientAllergies || [],
+      potentialSideEffects: potentialSideEffects || []
     });
 
     await medication.save();
@@ -96,7 +137,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       .populate('patientId', 'fullName email phoneNumber')
       .populate('prescribedBy', 'fullName specialization');
 
-    console.log("✅ Medication prescribed successfully");
+    
 
     res.status(201).json({
       success: true,
@@ -114,6 +155,101 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
   }
 });
 
+// PUT /api/medications/prescribe/:medicationId - Update medication prescription
+router.put("/:medicationId", authenticateUser, async (req: any, res: any) => {
+  try {
+    const { medicationId } = req.params;
+    const {
+      medicationName,
+      dosage,
+      frequency,
+      duration,
+      instructions,
+      reminders,
+      startDate,
+      patientAllergies,
+      potentialSideEffects
+    } = req.body;
+
+    // Check if user is a doctor
+    if (req.userRole !== 'doctor') {
+      return res.status(403).json({
+        success: false,
+        message: "Only doctors can update medications"
+      });
+    }
+
+   
+
+    await connectMongoDB();
+
+    // Find the medication
+    const medication = await MedicationModel.findById(medicationId);
+    
+    if (!medication) {
+      return res.status(404).json({
+        success: false,
+        message: "Medication not found"
+      });
+    }
+
+    // Verify the doctor is the one who prescribed it
+    if (medication.prescribedBy.toString() !== req.userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only update medications you prescribed"
+      });
+    }
+
+    // Calculate new end date if start date or duration changed
+    const newStartDate = startDate || medication.startDate;
+    const newDuration = duration || medication.duration;
+    const endDate = calculateEndDate(newStartDate, newDuration);
+
+    // Update medication fields
+    const updateFields: any = {
+      updatedAt: new Date()
+    };
+
+    if (medicationName) updateFields.medicationName = medicationName;
+    if (dosage) updateFields.dosage = dosage;
+    if (frequency) updateFields.frequency = frequency;
+    if (duration) updateFields.duration = duration;
+    if (instructions !== undefined) updateFields.instructions = instructions;
+    if (reminders) updateFields.reminders = reminders;
+    if (startDate) updateFields.startDate = startDate;
+    if (patientAllergies) updateFields.patientAllergies = patientAllergies;
+    if (potentialSideEffects) updateFields.potentialSideEffects = potentialSideEffects;
+    
+    // Always update end date when start date or duration changes
+    updateFields.endDate = endDate;
+
+    const updatedMedication = await MedicationModel.findByIdAndUpdate(
+      medicationId,
+      { $set: updateFields },
+      { new: true, runValidators: true }
+    )
+      .populate('patientId', 'fullName email phoneNumber')
+      .populate('prescribedBy', 'fullName specialization');
+
+    
+
+    res.json({
+      success: true,
+      message: "Medication updated successfully",
+      data: updatedMedication
+    });
+
+  } catch (error: any) {
+    console.error('Error updating medication:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update medication",
+      error: error.message
+    });
+  }
+});
+
 // GET /api/medications/prescribe/my-prescriptions - Get medications prescribed by this doctor
 router.get("/my-prescriptions", authenticateUser, async (req: any, res: any) => {
   try {
@@ -125,8 +261,7 @@ router.get("/my-prescriptions", authenticateUser, async (req: any, res: any) => 
       });
     }
 
-    console.log("=== FETCHING DOCTOR'S PRESCRIPTIONS ===");
-    console.log("Doctor ID:", req.userId);
+    
 
     await connectMongoDB();
 
@@ -137,7 +272,7 @@ router.get("/my-prescriptions", authenticateUser, async (req: any, res: any) => 
     .populate('prescribedBy', 'fullName specialization')
     .sort({ createdAt: -1 });
 
-    console.log(`✅ Found ${medications.length} prescriptions`);
+    
 
     res.json({
       success: true,
@@ -149,6 +284,55 @@ router.get("/my-prescriptions", authenticateUser, async (req: any, res: any) => 
     res.status(500).json({
       success: false,
       message: "Failed to fetch prescriptions",
+      error: error.message
+    });
+  }
+});
+
+// GET /api/medications/prescribe/:medicationId - Get single medication details
+router.get("/:medicationId", authenticateUser, async (req: any, res: any) => {
+  try {
+    const { medicationId } = req.params;
+
+    // Check if user is a doctor
+    if (req.userRole !== 'doctor') {
+      return res.status(403).json({
+        success: false,
+        message: "Only doctors can access medication details"
+      });
+    }
+
+    await connectMongoDB();
+
+    const medication = await MedicationModel.findById(medicationId)
+      .populate('patientId', 'fullName email phoneNumber')
+      .populate('prescribedBy', 'fullName specialization');
+
+    if (!medication) {
+      return res.status(404).json({
+        success: false,
+        message: "Medication not found"
+      });
+    }
+
+    // Verify the doctor is the one who prescribed it
+    if (medication.prescribedBy._id.toString() !== req.userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only view medications you prescribed"
+      });
+    }
+
+    res.json({
+      success: true,
+      data: medication
+    });
+
+  } catch (error: any) {
+    console.error('Error fetching medication:', error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch medication",
       error: error.message
     });
   }

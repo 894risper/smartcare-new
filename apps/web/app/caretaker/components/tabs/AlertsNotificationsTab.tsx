@@ -1,8 +1,8 @@
 import React from 'react';
-import { 
-  Bell, 
-  AlertTriangle, 
-  CheckCircle, 
+import {
+  Bell,
+  AlertTriangle,
+  CheckCircle,
   Info,
   Clock,
   ArrowRight,
@@ -42,70 +42,94 @@ const AlertsNotificationsTab: React.FC<AlertsNotificationsTabProps> = ({
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Mock data for demonstration - in real app, this would come from API
-  React.useEffect(() => {
-    // Simulate API call
-    const mockNotifications: Notification[] = [
-      {
-        id: '1',
-        type: 'hypertension_alert',
-        title: 'High Blood Pressure Alert',
-        message: 'Patient BP reading shows Stage 1 Hypertension',
-        patientId: patient.id,
-        patientName: patient.fullName,
-        timestamp: new Date(Date.now() - 30 * 60 * 1000), // 30 minutes ago
-        read: false,
-        priority: 'high',
-        bpCategory: 'Stage 1',
-        systolic: 145,
-        diastolic: 92
-      },
-      {
-        id: '2',
-        type: 'vital_alert',
-        title: 'Abnormal Heart Rate',
-        message: 'Patient heart rate is elevated at 110 bpm',
-        patientId: patient.id,
-        patientName: patient.fullName,
-        timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
-        read: false,
-        priority: 'medium',
-        systolic: 130,
-        diastolic: 85,
-        heartRate: 110
-      },
-      {
-        id: '3',
-        type: 'appointment',
-        title: 'Upcoming Appointment',
-        message: 'Follow-up appointment scheduled for tomorrow at 2:00 PM',
-        patientId: patient.id,
-        patientName: patient.fullName,
-        timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000), // 4 hours ago
-        read: true,
-        priority: 'low'
-      },
-      {
-        id: '4',
-        type: 'message',
-        title: 'New Patient Message',
-        message: 'Patient has a question about their medication dosage',
-        patientId: patient.id,
-        patientName: patient.fullName,
-        timestamp: new Date(Date.now() - 6 * 60 * 60 * 1000), // 6 hours ago
-        read: true,
-        priority: 'medium'
+  // Fetch real notifications from API instead of using mock data
+  const fetchNotifications = React.useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = localStorage.getItem('token');
+
+      if (!token) {
+        throw new Error('No authentication token found');
       }
-    ];
 
-    // Simulate loading delay
-    const timer = setTimeout(() => {
-      setNotifications(mockNotifications);
+      // Use patient.id or patient.userId as fallback
+      const patientIdentifier = patient.id || patient.userId;
+      if (!patientIdentifier) {
+        setError('Patient identifier not found');
+        setNotifications([]);
+        return;
+      }
+
+      // Fetch ALL notifications for this specific patient (read + unread, no filters)
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/notifications/patient/${patientIdentifier}?limit=100`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          // No notifications found for this patient - this is fine, just show empty state
+          setNotifications([]);
+          return;
+        }
+        throw new Error(`Failed to fetch notifications: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success && result.data) {
+        const realNotifications: Notification[] = result.data.map((notification: any) => {
+          return {
+            id: notification._id,
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            patientId: notification.patientId,
+            patientName: notification.patientName,
+            timestamp: new Date(notification.createdAt),
+            read: notification.read || false,
+            priority: notification.priority || 'medium',
+            bpCategory: notification.bpCategory,
+            systolic: notification.systolic,
+            diastolic: notification.diastolic,
+            heartRate: notification.heartRate
+          };
+        });
+
+        setNotifications(realNotifications);
+      } else {
+        // No notifications found - show empty state
+        setNotifications([]);
+      }
+    } catch (error: any) {
+      console.error('Failed to fetch notifications:', error);
+      setError(error.message);
+      // Show error state instead of mock data
+      setNotifications([]);
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
+  }, [patient.id, patient.userId]);
 
-    return () => clearTimeout(timer);
-  }, [patient.id, patient.fullName]);
+  // Fetch notifications on component mount and setup polling
+  React.useEffect(() => {
+    fetchNotifications();
+
+    // Poll every 30 seconds only when tab is visible
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        fetchNotifications();
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
 
   const getNotificationIcon = (type: Notification['type']) => {
     switch (type) {
@@ -167,23 +191,57 @@ const AlertsNotificationsTab: React.FC<AlertsNotificationsTabProps> = ({
     return `${Math.floor(diffInHours / 24)}d ago`;
   };
 
-  const handleNotificationClick = (notification: Notification) => {
-    // Handle different notification types
-    switch (notification.type) {
-      case 'hypertension_alert':
-        console.log(`Viewing ${notification.bpCategory} hypertension alert for ${notification.patientName}`);
-        break;
-      case 'message':
-        console.log(`Opening conversation with ${notification.patientName}`);
-        break;
-      case 'vital_alert':
-        console.log(`Viewing vital alert for ${notification.patientName}`);
-        break;
-      case 'appointment':
-        console.log(`Viewing appointment details for ${notification.patientName}`);
-        break;
-      default:
-        console.log('Viewing notification details');
+  const handleNotificationClick = async (notification: Notification) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      // Mark notification as read
+      if (!notification.read) {
+        await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/notifications/${notification.id}/read`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        // Update local state
+        setNotifications(prev =>
+          prev.map(n => 
+            n.id === notification.id ? { ...n, read: true } : n
+          )
+        );
+      }
+
+      // Handle different notification types
+      switch (notification.type) {
+        case 'hypertension_alert':
+          console.log(`Viewing ${notification.bpCategory} hypertension alert for ${notification.patientName}`);
+          break;
+        case 'message':
+          // Focus on messages tab and scroll to message
+          document.getElementById('messages-tab')?.click();
+          setTimeout(() => {
+            const messageElement = document.getElementById(`message-${notification.id}`);
+            messageElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            messageElement?.classList.add('bg-yellow-50', 'animate-pulse-once');
+          }, 100);
+          break;
+        case 'vital_alert':
+          console.log(`Viewing vital alert for ${notification.patientName}`);
+          break;
+        case 'appointment':
+          console.log(`Viewing appointment details for ${notification.patientName}`);
+          break;
+        default:
+          console.log('Viewing notification details');
+      }
+    } catch (error) {
+      console.error('Error handling notification click:', error);
     }
   };
 
@@ -224,7 +282,9 @@ const AlertsNotificationsTab: React.FC<AlertsNotificationsTabProps> = ({
           <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />
         </div>
         <div className="flex justify-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          <div className="animate-pulse text-sm text-gray-500">
+            Loading...
+          </div>
         </div>
       </div>
     );
@@ -262,13 +322,7 @@ const AlertsNotificationsTab: React.FC<AlertsNotificationsTabProps> = ({
           </div>
         </div>
         <button
-          onClick={() => {
-            // Refresh notifications
-            setLoading(true);
-            setTimeout(() => {
-              setLoading(false);
-            }, 1000);
-          }}
+          onClick={fetchNotifications}
           className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           title="Refresh notifications"
         >
@@ -407,15 +461,48 @@ const AlertsNotificationsTab: React.FC<AlertsNotificationsTabProps> = ({
                 {sortedNotifications.filter(n => !n.read).length} unread notification(s) - Click to view details
               </p>
             </div>
-            <button 
-              className="px-3 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
-              onClick={() => {
-                // Mark all notifications as read
-                console.log('Mark all as read');
-              }}
-            >
-              Mark All Read
-            </button>
+              <button
+                className="px-3 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+                onClick={async () => {
+                  // Mark all notifications as read
+                  try {
+                    const token = localStorage.getItem('token');
+                    if (!token) return;
+
+                    // Mark all unread notifications as read
+                    const unreadNotifications = sortedNotifications.filter(n => !n.read);
+
+                    for (const notification of unreadNotifications) {
+                      try {
+                        await fetch(
+                          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/notifications/${notification.id}/read`,
+                          {
+                            method: 'POST',
+                            headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'Content-Type': 'application/json'
+                            }
+                          }
+                        );
+                      } catch (error) {
+                        console.error(`Failed to mark notification ${notification.id} as read:`, error);
+                      }
+                    }
+
+                    // Update local state to mark all as read
+                    setNotifications(prev =>
+                      prev.map(notification =>
+                        notification.read ? notification : { ...notification, read: true }
+                      )
+                    );
+
+                  } catch (error) {
+                    console.error('Failed to mark notifications as read:', error);
+                  }
+                }}
+              >
+                Mark All Read
+              </button>
           </div>
         </div>
       )}

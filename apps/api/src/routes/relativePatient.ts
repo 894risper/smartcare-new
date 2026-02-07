@@ -12,6 +12,21 @@ import { connectMongoDB } from "../lib/mongodb";
 
 const router = express.Router();
 
+interface IUserRelative {
+  _id: mongoose.Types.ObjectId;
+  email: string;
+  fullName: string;
+  phoneNumber?: string;
+  role: string;
+  monitoredPatient?: mongoose.Types.ObjectId;
+  monitoredPatientProfile?: mongoose.Types.ObjectId;
+  relationshipToPatient?: string;
+  accessLevel?: string;
+  isEmergencyContact?: boolean;
+  invitationStatus?: string;
+}
+
+
 // Authentication middleware for relatives
 const authenticateRelative = (req: any, res: any, next: any) => {
   try {
@@ -33,10 +48,10 @@ const authenticateRelative = (req: any, res: any, next: any) => {
     req.userEmail = decoded.email;
     req.userRole = decoded.role;
 
-    console.log("✅ Authenticated relative:", decoded.userId);
+    
     next();
   } catch (error) {
-    console.error("❌ Token verification failed:", error);
+    console.error("Token verification failed:", error);
     return res.status(401).json({ 
       success: false,
       message: "Invalid token" 
@@ -56,33 +71,71 @@ const toObjectId = (userId: any) => {
   return userId;
 };
 
-// ✅ GET /api/relative/patient-profile
-// Get the monitored patient's profile
-router.get("/patient-profile", authenticateRelative, async (req: any, res: any) => {
+// GET /api/relative/profile
+// Get the relative's own profile INCLUDING monitoredPatient
+// GET /api/relative/profile
+router.get("/profile", authenticateRelative, async (req: any, res: any) => {
   try {
     await connectMongoDB();
 
-    console.log("🔍 Relative fetching patient profile, relativeId:", req.userId);
+    // Cast the result to our interface
+    const relativeUser = await User.findById(toObjectId(req.userId))
+      .select('_id email fullName phoneNumber role monitoredPatient monitoredPatientProfile relationshipToPatient accessLevel isEmergencyContact invitationStatus')
+      .lean() as IUserRelative | null;
 
-    // Get the relative's user record
-    const relativeUser = await User.findById(toObjectId(req.userId));
-    
-    if (!relativeUser || relativeUser.role !== "relative") {
-      console.error("❌ Not a relative user");
+    // Check if relativeUser exists first
+    if (!relativeUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    if (relativeUser.role !== "relative") {
       return res.status(403).json({
         success: false,
         message: "Access denied. Not a relative account."
       });
     }
 
-    console.log("✅ Relative user found:", {
-      id: relativeUser._id,
-      email: relativeUser.email,
-      monitoredPatient: relativeUser.monitoredPatient,
-      monitoredPatientProfile: relativeUser.monitoredPatientProfile
+    res.status(200).json({
+      success: true,
+      data: {
+        userId: relativeUser._id.toString(),
+        email: relativeUser.email,
+        fullName: relativeUser.fullName,
+        phoneNumber: relativeUser.phoneNumber,
+        role: relativeUser.role,
+        monitoredPatient: relativeUser.monitoredPatient?.toString(),
+        monitoredPatientProfile: relativeUser.monitoredPatientProfile?.toString(),
+        relationship: relativeUser.relationshipToPatient,
+        accessLevel: relativeUser.accessLevel,
+        isEmergencyContact: relativeUser.isEmergencyContact,
+        invitationStatus: relativeUser.invitationStatus
+      }
     });
 
-    // Get the patient profile
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to fetch relative profile" });
+  }
+});
+
+
+
+router.get("/patient-profile", authenticateRelative, async (req: any, res: any) => {
+  try {
+    await connectMongoDB();
+
+    
+    const relativeUser = await User.findById(toObjectId(req.userId));
+
+    if (!relativeUser || relativeUser.role !== "relative") {
+      console.error(" Not a relative user");
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Not a relative account."
+      });
+    }
+
+    
+
     if (!relativeUser.monitoredPatientProfile) {
       return res.status(404).json({
         success: false,
@@ -93,29 +146,46 @@ router.get("/patient-profile", authenticateRelative, async (req: any, res: any) 
     const patient = await Patient.findById(relativeUser.monitoredPatientProfile);
 
     if (!patient) {
-      console.error("❌ Patient profile not found");
+      console.error(" Patient profile not found");
       return res.status(404).json({
         success: false,
         message: "Patient profile not found"
       });
     }
 
-    console.log("✅ Patient profile found:", patient._id);
+    
 
-    // Get patient's user account for additional info
-    const patientUser = await User.findById(toObjectId(patient.userId));
+    let patientUser = await User.findById(toObjectId(patient.userId));
+    // Get the patient's User record
+    let patientUserId = patient.userId;
+
+    // If patient.userId doesn't exist, try to find it by email or use monitoredPatient
+    if (!patientUserId && patient.email) {
+      patientUser = await User.findOne({
+        email: patient.email,
+        role: 'patient'
+      }).select('_id');
+      patientUserId = patientUser?._id;
+    }
+
+    // Fallback to relativeUser.monitoredPatient (which should be the patient's User ID)
+    if (!patientUserId) {
+      patientUserId = relativeUser.monitoredPatient;
+    }
+    console.log("✅ Patient User ID:", patientUserId);
 
     res.status(200).json({
       success: true,
       data: {
         id: patient._id.toString(),
         name: patient.fullName || `${patient.firstname} ${patient.lastname}`,
+        userId: patientUserId?.toString(),
         email: patientUser?.email || patient.email,
         phoneNumber: patient.phoneNumber || patientUser?.phoneNumber,
-        condition: patient.condition || 
-                   (patient.diabetes && patient.hypertension ? 'both' : 
-                    patient.diabetes ? 'diabetes' : 
-                    patient.hypertension ? 'hypertension' : 'unknown'),
+        condition: patient.condition ||
+          (patient.diabetes && patient.hypertension ? 'both' :
+            patient.diabetes ? 'diabetes' :
+              patient.hypertension ? 'hypertension' : 'unknown'),
         dob: patient.dob,
         gender: patient.gender,
         diabetes: patient.diabetes || false,
@@ -125,12 +195,13 @@ router.get("/patient-profile", authenticateRelative, async (req: any, res: any) 
         surgeries: patient.surgeries || "",
         picture: patient.picture,
         weight: patient.weight,
-        height: patient.height
+        height: patient.height,
+        location: patient.location || null  // ADD THIS LINE - Include location data
       }
     });
 
   } catch (error) {
-    console.error("❌ Fetch patient profile error:", error);
+    console.error(" Fetch patient profile error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch patient profile"
@@ -144,7 +215,7 @@ router.get("/patient-vitals", authenticateRelative, async (req: any, res: any) =
   try {
     await connectMongoDB();
 
-    console.log("🔍 Relative fetching patient vitals, relativeId:", req.userId);
+    
 
     // Get the relative's user record
     const relativeUser = await User.findById(toObjectId(req.userId));
@@ -164,8 +235,7 @@ router.get("/patient-vitals", authenticateRelative, async (req: any, res: any) =
     }
 
     const patientUserId = relativeUser.monitoredPatient;
-    console.log("📋 Fetching vitals for patient userId:", patientUserId);
-
+   
     // Get patient profile to determine condition
     const patient = await Patient.findById(relativeUser.monitoredPatientProfile);
 
@@ -188,9 +258,7 @@ router.get("/patient-vitals", authenticateRelative, async (req: any, res: any) =
       }).sort({ createdAt: -1 }).limit(100)
     ]);
 
-    console.log(`💙 Found ${hypertensionVitals.length} hypertension vitals`);
-    console.log(`💛 Found ${diabetesVitals.length} diabetes vitals`);
-
+    
     // Combine and format vitals
     vitals = [
       ...hypertensionVitals.map(vital => ({
@@ -221,8 +289,7 @@ router.get("/patient-vitals", authenticateRelative, async (req: any, res: any) =
     // Sort by timestamp (newest first)
     vitals.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-    console.log(`✅ Returning ${vitals.length} total vitals`);
-
+   
     res.status(200).json({
       success: true,
       data: vitals,
@@ -313,7 +380,7 @@ router.get("/patient-summary", authenticateRelative, async (req: any, res: any) 
   }
 });
 
-// ✅ GET /api/relative/patient-stats
+//  GET /api/relative/patient-stats
 // Get statistics for patient's vitals
 router.get("/patient-stats", authenticateRelative, async (req: any, res: any) => {
   try {
@@ -374,7 +441,7 @@ router.get("/patient-stats", authenticateRelative, async (req: any, res: any) =>
     });
 
   } catch (error) {
-    console.error("❌ Fetch patient stats error:", error);
+    console.error("Fetch patient stats error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch patient statistics"

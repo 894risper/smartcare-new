@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import Groq from 'groq-sdk';
-import { generateMedicationInteractions, generateMedicationInteractionsEnhanced } from '../services/HypertensionAI';
+import { generateMedicationInteractions } from '../services/HypertensionAI';
 import { verifyToken, AuthenticatedRequest } from '../middleware/verifyToken';
 import Patient from '../models/patient';
 
@@ -57,18 +57,10 @@ export const medicationAnalysis = async (req: AuthenticatedRequest, res: Respons
     // Get patient name if available
     patientName = patient?.name || patient?.fullName;
 
-    // OPTION 1: Use the original 2-argument function (backward compatible)
-    // const aiAnalysis = await generateMedicationInteractions(normalized, language);
-    
-    // OPTION 2: Use the enhanced 3-argument function with patient context (RECOMMENDED)
-    const aiAnalysis = await generateMedicationInteractionsEnhanced(
+   
+const aiAnalysis = await generateMedicationInteractions(
       normalized, 
-      language, 
-      { 
-        age, 
-        condition: 'Hypertension', 
-        patientName 
-      }
+      language
     );
 
     // Format the response to match what the frontend expects

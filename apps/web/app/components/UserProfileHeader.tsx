@@ -1,18 +1,23 @@
 "use client";
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import DoctorManagement from "./DoctorManagement";
-import { 
-  User, 
-  Stethoscope, 
-  X, 
+import PatientMessages from '@/app/relatives/dashboard/components/PatientMessages';
+import {
+  User,
+  Stethoscope,
+  X,
   Calendar,
   Activity,
   AlertCircle,
   RefreshCw,
   Plus,
   Clock,
-  Languages
+  Languages,
+  LogOut,
+  ChevronDown,
+  MessageSquare
 } from "lucide-react";
 
 interface UserProfile {
@@ -43,17 +48,20 @@ interface UserProfileHeaderProps {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({ 
-  onDoctorsToggle, 
+const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
+  onDoctorsToggle,
   currentLanguage = "en",
-  onLanguageChange 
+  onLanguageChange
 }) => {
   const router = useRouter();
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDoctors, setShowDoctors] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [language, setLanguage] = useState<"en" | "sw">(currentLanguage);
+  const [showMessages, setShowMessages] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const getAuthToken = useCallback((): string | null => {
     try {
@@ -71,19 +79,19 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
     try {
       const today = new Date();
       const birthDate = new Date(dob);
-      
+
       if (isNaN(birthDate.getTime())) {
         console.warn("Invalid date of birth:", dob);
         return 0;
       }
-      
+
       let age = today.getFullYear() - birthDate.getFullYear();
       const monthDiff = today.getMonth() - birthDate.getMonth();
-      
+
       if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
         age--;
       }
-      
+
       return age;
     } catch (error) {
       console.error("Error calculating age:", error);
@@ -94,7 +102,7 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
   const fetchUserProfile = useCallback(async () => {
     setLoading(true);
     setError(null);
-    
+
     try {
       const token = getAuthToken();
       if (!token) {
@@ -117,7 +125,7 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
       }
 
       const result = await response.json();
-      
+
       if (result.success && result.data) {
         const profileData = result.data;
         const age = profileData.dob ? calculateAge(profileData.dob) : undefined;
@@ -133,11 +141,45 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
     }
   }, [getAuthToken, calculateAge]);
 
-  const handleEscapeKey = useCallback((event: KeyboardEvent) => {
-    if (event.key === 'Escape' && showDoctors) {
-      handleShowDoctors();
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      setLoggingOut(true);
+
+      // Clear local storage
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("token");
+        sessionStorage.removeItem("token");
+        localStorage.removeItem("preferredLanguage");
+      }
+
+      // Sign out from NextAuth
+      await signOut({
+        redirect: false,
+        callbackUrl: "/login"
+      });
+
+      // Redirect to login page
+      router.push("/login");
+    } catch (error) {
+      console.error("Logout error:", error);
+      // Still redirect even if there's an error
+      router.push("/login");
+    } finally {
+      setLoggingOut(false);
     }
-  }, [showDoctors]);
+  };
+
+  const handleEscapeKey = useCallback((event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      if (showDoctors) {
+        handleShowDoctors();
+      }
+      if (showProfileMenu) {
+        setShowProfileMenu(false);
+      }
+    }
+  }, [showDoctors, showProfileMenu]);
 
   const handleBackdropClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) {
@@ -151,12 +193,24 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
     if (onLanguageChange) {
       onLanguageChange(newLanguage);
     }
-    
-    // Optional: Save language preference to localStorage
+
     if (typeof window !== "undefined") {
       localStorage.setItem("preferredLanguage", newLanguage);
     }
   };
+
+  // Close profile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showProfileMenu && !target.closest('.profile-menu-container')) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showProfileMenu]);
 
   // Load language preference from localStorage on component mount
   useEffect(() => {
@@ -191,6 +245,7 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
   }, [showDoctors, handleEscapeKey]);
 
   const handleViewProfile = () => {
+    setShowProfileMenu(false);
     router.push("/profile?step=5");
   };
 
@@ -211,6 +266,9 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
     en: {
       profile: "Profile",
       doctors: "Doctors",
+      logout: "Logout",
+      loggingOut: "Logging out...",
+      viewProfile: "View Profile",
       dr: "Dr",
       view: "View",
       noProfile: "No Profile Found",
@@ -221,11 +279,17 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
       doctorDescription: "Connect and communicate with your healthcare team",
       close: "Close",
       addDoctor: "Add Doctor",
-      healthcareTeam: "Your healthcare team is essential for comprehensive care"
+      healthcareTeam: "Your healthcare team is essential for comprehensive care",
+      relative: "Relative",
+      familyChat: "Family Messaging",
+      familyDescription: "Stay in touch with your relatives and caregivers",
     },
     sw: {
       profile: "Wasifu",
       doctors: "Madaktari",
+      logout: "Toka",
+      loggingOut: "Inatoka...",
+      viewProfile: "Tazama Wasifu",
       dr: "Dk",
       view: "Tazama",
       noProfile: "Hakuna Wasifu Ulipatikana",
@@ -233,10 +297,13 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
       profileError: "Hitilafu ya Wasifu",
       createProfile: "Unda Wasifu",
       doctorManagement: "Usimamizi wa Daktari",
-      doctorDescription: "Wasiliana na ushirikiana na timu yako ya afya",
+      doctorDescription: "Wasiliana na ushirikiano na timu yako ya afya",
       close: "Funga",
       addDoctor: "Ongeza Daktari",
-      healthcareTeam: "Timu yako ya afya ni muhimu kwa huduma kamili"
+      healthcareTeam: "Timu yako ya afya ni muhimu kwa huduma kamili",
+      relative: "Jamaa",
+      familyChat: "Ujumbe wa Familia",
+      familyDescription: "Wasiliana na jamaa na walezi wako"
     }
   };
 
@@ -322,7 +389,7 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
       </div>
     );
   }
-  
+
   const healthConditions = [];
   if (userProfile.diabetes) healthConditions.push("Diabetes");
   if (userProfile.hypertension) healthConditions.push("Hypertension");
@@ -334,18 +401,47 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
         <div className="flex items-center justify-between">
           {/* User Info Section - COMPACT */}
           <div className="flex items-center space-x-2 sm:space-x-3 flex-1 min-w-0">
-            {/* Profile Picture - Smaller */}
-            {userProfile.picture ? (
-              <img
-                src={userProfile.picture}
-                alt={`${userProfile.fullName}'s profile`}
-                className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border-2 border-blue-100 shadow-sm"
-              />
-            ) : (
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center shadow-sm">
-                <User className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-              </div>
-            )}
+            {/* Profile Picture - Clickable for dropdown */}
+            <div className="relative profile-menu-container">
+              <button
+                onClick={() => setShowProfileMenu(!showProfileMenu)}
+                className="focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-full"
+              >
+                {userProfile.picture ? (
+                  <img
+                    src={userProfile.picture}
+                    alt={`${userProfile.fullName}'s profile`}
+                    className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover border-2 border-blue-100 shadow-sm hover:border-blue-300 transition-colors"
+                  />
+                ) : (
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center shadow-sm hover:from-blue-600 hover:to-cyan-600 transition-all">
+                    <User className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+                  </div>
+                )}
+              </button>
+
+              {/* Profile Dropdown Menu */}
+              {showProfileMenu && (
+                <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                  <button
+                    onClick={handleViewProfile}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
+                  >
+                    <User className="w-4 h-4" />
+                    <span>{currentLangContent.viewProfile}</span>
+                  </button>
+                  <div className="border-t border-gray-200 my-1"></div>
+                  <button
+                    onClick={handleLogout}
+                    disabled={loggingOut}
+                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>{loggingOut ? currentLangContent.loggingOut : currentLangContent.logout}</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* User Details - COMPACT */}
             <div className="min-w-0 flex-1">
@@ -374,7 +470,7 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
                       {healthConditions.slice(0, 2).map((condition) => (
                         <span
                           key={condition}
-                          className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded-full"
+                          className="px-2 py-0.5 bg-emerald-100 text-blue-500 text-xs font-medium rounded-full"
                         >
                           {condition}
                         </span>
@@ -387,7 +483,7 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
                     </div>
                   )}
                 </div>
-                
+
                 {/* Detailed stats - Compact */}
                 <div className="flex items-center space-x-3 text-xs text-gray-600 mt-0.5">
                   <span>{userProfile.age || "N/A"} years</span>
@@ -415,11 +511,10 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
             {/* Manage Doctors Button - Compact */}
             <button
               onClick={handleShowDoctors}
-              className={`px-3 py-1.5 rounded-lg transition-all font-medium flex items-center space-x-1.5 border text-xs ${
-                showDoctors 
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-md' 
-                  : 'bg-white text-blue-600 border-blue-600 hover:bg-blue-600 hover:text-white'
-              }`}
+              className={`px-3 py-1.5 rounded-lg transition-all font-medium flex items-center space-x-1.5 border text-xs ${showDoctors
+                ? 'bg-blue-600 text-white border-blue-600 shadow-md'
+                : 'bg-white text-blue-600 border-blue-600 hover:bg-blue-600 hover:text-white'
+                }`}
             >
               <Stethoscope className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{currentLangContent.doctors}</span>
@@ -433,13 +528,35 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
               <User className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{currentLangContent.profile}</span>
             </button>
+
+            {/* Relative Messaging Button */}
+            <button
+              onClick={() => setShowMessages(true)}
+              className={`px-3 py-1.5 rounded-lg transition-all font-medium flex items-center space-x-1.5 border text-xs ${showMessages
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                : 'bg-white text-indigo-600 border-indigo-600 hover:bg-indigo-600 hover:text-white'
+                }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{currentLangContent.relative}</span>
+            </button>
+
+            {/* Logout Button - Always Visible */}
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors font-medium flex items-center space-x-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{loggingOut ? currentLangContent.loggingOut : currentLangContent.logout}</span>
+            </button>
           </div>
         </div>
       </div>
 
       {/* Doctor Management Modal */}
       {showDoctors && (
-        <div 
+        <div
           className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm"
           onClick={handleBackdropClick}
         >
@@ -464,14 +581,14 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
                 <X className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
             </div>
-            
+
             {/* Modal Content */}
             <div className="flex-1 overflow-y-auto bg-gray-50">
               <div className="p-4 sm:p-8">
                 <DoctorManagement condition="diabetes" />
               </div>
             </div>
-            
+
             {/* Modal Footer */}
             <div className="border-t border-gray-200 p-4 sm:p-6 bg-white">
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-3 sm:space-y-0">
@@ -496,6 +613,43 @@ const UserProfileHeader: React.FC<UserProfileHeaderProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Family Messaging Modal */}
+      {showMessages && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm"
+          onClick={() => setShowMessages(false)}
+        >
+          <div
+            className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-5xl h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex justify-between items-center p-4 sm:p-6 border-b border-gray-200 bg-indigo-600 text-white">
+              <div className="flex items-center space-x-3">
+                <MessageSquare className="w-6 h-6" />
+                <div>
+                  <h2 className="text-xl font-bold">{currentLangContent.familyChat}</h2>
+                  <p className="text-indigo-100 text-xs hidden sm:block">
+                    {currentLangContent.familyDescription}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowMessages(false)}
+                className="p-2 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Messaging Component */}
+            <div className="flex-1 overflow-hidden bg-gray-50 p-2 sm:p-4">
+              <PatientMessages />
             </div>
           </div>
         </div>
