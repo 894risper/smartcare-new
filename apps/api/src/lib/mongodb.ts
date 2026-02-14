@@ -1,16 +1,31 @@
 import mongoose from "mongoose";
 
-export const connectMongoDB = async ()=>{
-    try{
+let isConnected = false;
 
-        const mongoURI= process.env.MONGODB_URI;
-        if (!mongoURI){
-            throw new Error("MongoDB URI is missing in environment variable.");
-        }
-
-        await mongoose.connect(mongoURI);
-        console.log("✅ Connected to MongoDB")
-    }catch(error){
-        console.error("Error connecting to MongoDb",error)
+export const connectMongoDB = async () => {
+  try {
+    // Reuse existing connection
+    if (isConnected && mongoose.connection.readyState === 1) {
+      
+      return;
     }
-}
+
+    const mongoURI = process.env.MONGODB_URI;
+    if (!mongoURI) {
+      throw new Error("MongoDB URI is missing in environment variable.");
+    }
+
+    await mongoose.connect(mongoURI, {
+      maxPoolSize: 10, // Limit concurrent connections
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+    });
+
+    isConnected = true;
+    
+  } catch (error) {
+    isConnected = false;
+    console.error(" MongoDB connection error:", error);
+    throw error; // Let the caller handle the error
+  }
+};

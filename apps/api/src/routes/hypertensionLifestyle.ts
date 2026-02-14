@@ -2,7 +2,6 @@ import { Router, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { verifyToken, AuthenticatedRequest } from "../middleware/verifyToken";
 import { generateLifestyleRecommendations, updateLifestyle } from "../services/HypertensionAI"; 
-// Import from the correct service file
 
 const router = Router();
 
@@ -16,8 +15,9 @@ router.get(
       }
 
       const userId = req.user.userId; // ✅ strongly typed now
-      const weather = req.query.weather as string;
-      const result = await generateLifestyleRecommendations(userId, weather);
+      // Get language from query parameter, default to "en-US"
+      const language = (req.query.language as string) || "en-US";
+      const result = await generateLifestyleRecommendations(userId, language);
 
       res.json(result);
     } catch (err) {

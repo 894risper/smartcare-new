@@ -1,0 +1,845 @@
+"use client";
+
+import React, { useState, useEffect } from "react";
+import {
+  HeartPulse, Users, Search, Phone, MessageSquare, Calendar,
+  Stethoscope, AlertTriangle, CheckCircle, Clock, Filter, Activity, Pill, PlusCircle,IdCard,
+
+  TrendingUp, Shield, Bell, ArrowLeft, X, User, 
+} from "lucide-react";
+import { useSession } from "next-auth/react";
+import { Button, Input, Card, CardHeader, CardContent, CardTitle } from "@repo/ui";
+import DashboardHeader from "./components/DashboardHeader";
+
+import PatientTabs from './components/PatientTabs';
+import RealTimeNotifications from './components/RealTimeNotifications';
+import PatientHeader from './components/PatientHeader';
+import PatientMessages from "./components/PatientMessages";
+
+import AppointmentsView from './components/AppointmentsView';
+import MedicationPrescriptionModal from './components/MedicationPrescriptionModal';
+import AssignedPatientsGrid from './components/AssignedPatientsGrid';
+
+// NEW: Import expiring medications components
+import ExpiringMedicationsAlert from './components/ExpiringMedicationsAlert';
+import ExpiringMedicationsDashboard from "./components/ExpiringMedicationDashboard";
+
+interface Patient {
+  id: string;
+  userId?: string;
+  user?: {
+    _id: string;
+    id?: string;
+    fullName: string;
+    email: string;
+  };
+  fullName: string;
+  age: number;
+  gender: string;
+  condition: "hypertension" | "diabetes" | "both";
+  lastVisit: string;
+  status: "stable" | "warning" | "critical";
+  phoneNumber?: string;
+  email?: string;
+  patientId?: string; // ✅ ADDED: Patient ID field
+  allergies?: Array<{
+    allergyName: string;
+    severity: string;
+    reaction: string;
+  }>;
+}
+
+interface VitalSigns {
+  id?: string;
+  systolic?: number;
+  diastolic?: number;
+  heartRate?: number;
+  glucose?: number;
+  timestamp: string;
+  patientId: string;
+  age?: number;
+}
+
+interface PatientRequest {
+  patientId: string;
+  patientName: string;
+  requestedAt: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  _id?: string;
+}
+
+const CaretakerDashboard = () => {
+  const { data: session, status } = useSession();
+
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+  const [patientVitals, setPatientVitals] = useState<VitalSigns[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterCondition, setFilterCondition] = useState<"all" | "hypertension" | "diabetes" | "both">("all");
+  const [isLoading, setIsLoading] = useState(false);
+  const [patientsLoading, setPatientsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState('');
+  const [hasToken, setHasToken] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // New state for prescription modal
+  const [showPrescriptionModal, setShowPrescriptionModal] = useState(false);
+  const [selectedPatientForPrescription, setSelectedPatientForPrescription] = useState<Patient | null>(null);
+  const [activePatientTab, setActivePatientTab] = useState<'overview' | 'current-vitals' | 'health-trends' | 'risk-assessment' | 'alerts' | 'medications' | 'appointments' | 'messages'>('overview');
+  const [fullScreenMode, setFullScreenMode] = useState(false);
+
+  // Extract role from JWT token
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      try {
+        const tokenParts = token.split(".");
+        if (tokenParts.length === 3) {
+          const base64 = tokenParts[1];
+          if (base64) {
+            const payload = JSON.parse(atob(base64));
+            setUserRole(payload?.role ?? null);
+          }
+        }
+      } catch (error) {
+        console.error("Error decoding token:", error);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      setHasToken(!!token);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!message) return;
+    const t = setTimeout(() => setMessage(''), 3000);
+    return () => clearTimeout(t);
+  }, [message]);
+
+  // Fetch assigned patients
+  useEffect(() => {
+    if (status === "authenticated" || hasToken) {
+      fetchAssignedPatients();
+    }
+  }, [status, hasToken, refreshTrigger]);
+
+  const fetchAssignedPatients = async () => {
+    try {
+      setPatientsLoading(true);
+      setError(null);
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/doctor/assigned-patients`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error("Authentication failed. Please log in again.");
+        }
+        if (response.status === 404) {
+          setPatients([]);
+          return;
+        }
+        throw new Error(`Failed to fetch patients: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      let patientsData: Patient[] = [];
+
+      if (Array.isArray(data)) {
+        patientsData = data;
+      } else if (data.assignedPatients) {
+        patientsData = data.assignedPatients;
+      } else if (data.patients) {
+        patientsData = data.patients;
+      } else if (data.data) {
+        patientsData = data.data;
+      }
+
+      setPatients(patientsData);
+
+    } catch (error: any) {
+      console.error("❌ Failed to fetch assigned patients:", error);
+      setError(error.message);
+    } finally {
+      setPatientsLoading(false);
+    }
+  };
+
+  const fetchPatientVitals = async (patientId: string) => {
+    try {
+      setIsLoading(true);
+      setPatientVitals([]);
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      const apiEndpoints = [
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/patient/vitals/${patientId}`,
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/patient/${patientId}/vitals`,
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/vitals/patient/${patientId}`,
+      ];
+
+      let response = null;
+      let lastError = null;
+
+      for (const apiUrl of apiEndpoints) {
+        try {
+          response = await fetch(apiUrl, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+
+            if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+              const validatedVitals = result.data.map((vital: any) => ({
+                ...vital,
+                patientId: patientId,
+                timestamp: vital.timestamp || vital.createdAt || vital.date || new Date().toISOString(),
+                age: vital.age || undefined
+              }));
+
+              setPatientVitals(validatedVitals);
+              return;
+            } else {
+              setPatientVitals([]);
+              return;
+            }
+          } else if (response.status !== 404) {
+            continue;
+          }
+        } catch (err) {
+          lastError = err;
+          continue;
+        }
+      }
+
+      setPatientVitals([]);
+
+    } catch (error: any) {
+      console.error("Failed to fetch patient vitals:", error);
+      setPatientVitals([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePatientSelect = (patient: Patient) => {
+    const patientIdentifier = patient.userId || patient.id;
+
+    setSelectedPatient(patient);
+    setPatientVitals([]);
+
+    fetchPatientVitals(patientIdentifier);
+  };
+
+  const findPatientMatch = (patientId?: string) => {
+    if (!patientId) return null;
+    return patients.find((patient) =>
+      patient.id === patientId ||
+      patient.userId === patientId ||
+      patient.user?._id === patientId ||
+      patient.user?.id === patientId
+    ) || null;
+  };
+
+  const handleNotificationSelect = ({ notification, preferredTab }: { notification: { patientId?: string; patientName?: string }; preferredTab: string }) => {
+    const matchedPatient = findPatientMatch(notification.patientId);
+    if (matchedPatient) {
+      handlePatientSelect(matchedPatient);
+      return;
+    }
+    setMessage(`Unable to open notification for ${notification.patientName || 'patient'} — please refresh assigned patients.`);
+  };
+
+  const handleOpenMessaging = () => {
+    if (selectedPatient) {
+      // Set the active tab to messages
+      setActivePatientTab('messages');
+      setFullScreenMode(true);
+    } else {
+      setMessage("Please select a patient first to open messaging");
+      console.error("No patient selected for messaging");
+    }
+  };
+
+  // NEW: Handle medication alert click
+  const handleMedicationAlertClick = (patientId: string, medicationId: string) => {
+    console.log('🚨 handleMedicationAlertClick called with:', { patientId, medicationId });
+    console.log('📋 Current patients list:', patients);
+    
+    // Find the patient
+    const patient = patients.find(p =>
+      p.id === patientId ||
+      p.userId === patientId ||
+      p.user?._id === patientId ||
+      p.user?.id === patientId
+    );
+
+    console.log('🔍 Found patient:', patient);
+
+    if (patient) {
+      // Select the patient
+      handlePatientSelect(patient);
+      // Switch to medications tab
+      setActivePatientTab('medications');
+      // Show success message
+      setMessage(`Viewing medications for ${patient.fullName}`);
+      console.log('✅ Successfully navigated to patient medications');
+    } else {
+      setMessage('Patient not found in your assigned patients');
+      console.log('❌ Patient not found in assigned patients list');
+    }
+  };
+
+  const refreshAssignedPatients = () => {
+    setRefreshTrigger(prev => prev + 1);
+  };
+
+  const refreshVitals = () => {
+    if (selectedPatient) {
+      const patientIdentifier = selectedPatient.userId || selectedPatient.id;
+      fetchPatientVitals(patientIdentifier);
+    }
+  };
+
+  const handleSignInPatient = async (patientId: string) => {
+    try {
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        throw new Error("No authentication token found");
+      }
+
+      const response = await fetch('/api/doctor/sign-in-patient', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ patientId }),
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          updatePatientLastVisit(patientId);
+          return;
+        }
+        throw new Error(`Failed to sign in patient: ${response.status}`);
+      }
+
+      updatePatientLastVisit(patientId);
+
+    } catch (error: any) {
+      console.error("Failed to sign in patient:", error);
+      updatePatientLastVisit(patientId);
+    }
+  };
+
+  const updatePatientLastVisit = (patientId: string) => {
+    setPatients(prev => prev.map(p =>
+      p.id === patientId ? { ...p, lastVisit: new Date().toISOString() } : p
+    ));
+
+    if (selectedPatient && selectedPatient.id === patientId) {
+      setSelectedPatient(prev =>
+        prev ? { ...prev, lastVisit: new Date().toISOString() } : null
+      );
+    }
+  };
+
+  // NEW: Handle prescription button click
+  const handlePrescribeMedication = () => {
+    if (selectedPatient) {
+      setSelectedPatientForPrescription(selectedPatient);
+      setShowPrescriptionModal(true);
+    } else {
+      setMessage('Please select a patient first');
+    }
+  };
+
+  // NEW: Handle prescription modal close
+  const handleClosePrescriptionModal = () => {
+    setShowPrescriptionModal(false);
+    setSelectedPatientForPrescription(null);
+  };
+
+  // NEW: Handle prescription success
+  const handlePrescriptionSuccess = () => {
+    setShowPrescriptionModal(false);
+    setSelectedPatientForPrescription(null);
+    setMessage('Medication prescribed successfully!');
+    // Refresh medications if on medications tab
+    // You might want to add a refresh trigger for medications
+    setRefreshTrigger(prev => prev + 1);
+  };
+
+  const filteredPatients = patients.filter(patient => {
+    const matchesSearch = patient.fullName.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesCondition = filterCondition === "all" || patient.condition === filterCondition;
+    return matchesSearch && matchesCondition;
+  });
+
+  // Patients shown in the main list – hide the currently selected patient
+  const visiblePatients = filteredPatients.filter(patient =>
+    !selectedPatient || patient.id !== selectedPatient.id
+  );
+
+  const getStatusIcon = (status: Patient["status"]) => {
+    switch (status) {
+      case "stable":
+        return <CheckCircle className="w-4 h-4 text-green-500" />;
+      case "warning":
+        return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
+      case "critical":
+        return <AlertTriangle className="w-4 h-4 text-red-500" />;
+      default:
+        return null;
+    }
+  };
+
+  const getConditionColor = (condition: Patient["condition"]) => {
+    switch (condition) {
+      case "hypertension":
+        return "bg-blue-100 text-blue-800";
+      case "diabetes":
+        return "bg-orange-100 text-orange-800";
+      case "both":
+        return "bg-purple-100 text-purple-800";
+      default:
+        return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  const getConditionIcon = (condition: Patient["condition"]) => {
+    switch (condition) {
+      case "hypertension":
+        return <HeartPulse className="w-4 h-4" />;
+      case "diabetes":
+        return <Activity className="w-4 h-4" />;
+      case "both":
+        return <div className="flex space-x-1">
+          <HeartPulse className="w-4 h-4 text-blue-500" />
+          <Activity className="w-4 h-4 text-orange-500" />
+        </div>;
+      default:
+        return null;
+    }
+  };
+
+  useEffect(() => {
+    console.log("📊 PATIENT VITALS STATE UPDATED:", {
+      count: patientVitals.length,
+      vitals: patientVitals
+    });
+  }, [patientVitals]);
+
+  if (status === "loading") {
+    return <div className="min-h-screen bg-gray-100 flex items-center justify-center">Loading...</div>;
+  }
+
+  if (hasToken && userRole !== null && userRole !== "doctor") {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Access Denied</h2>
+          <p className="text-gray-600">This dashboard is for doctors only. Please log in as a doctor.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "unauthenticated" && !hasToken) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 flex items-center justify-center">
+        <div className="text-center bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl px-8 py-10 border border-emerald-100/60 max-w-md w-full">
+          <h2 className="text-2xl font-bold text-gray-900 mb-3">Please Log In</h2>
+          <p className="text-gray-600 text-sm">
+            You need to log in first to access this SmartCare clinician dashboard.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50">
+          {/* Non-sticky header with beautiful gradient */}
+          <div className="w-full bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 shadow-xl border-b border-emerald-600/20">
+            <DashboardHeader
+              onOpenMessages={handleOpenMessaging}
+              hasUnreadMessages={false} // You can implement unread message detection here
+              onMedicationClick={handleMedicationAlertClick}
+            />
+          </div>
+
+      {/* Floating realtime notifications tray */}
+      <RealTimeNotifications onNotificationSelect={handleNotificationSelect} />
+
+      {/* SPA Layout: Full screen mode or normal grid mode */}
+      {!fullScreenMode ? (
+        // Normal Grid Layout
+        <main className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8 flex flex-col gap-6">
+          {message && (
+            <div className="fixed top-24 right-4 bg-emerald-50 border border-emerald-300 text-emerald-800 px-4 py-3 rounded-xl shadow-md z-50 text-sm">
+              {message}
+            </div>
+          )}
+
+          {error && (
+            <div className="bg-amber-50/90 border-l-4 border-amber-400 p-4 w-full rounded-xl shadow-sm max-w-7xl mx-auto">
+              <div className="flex">
+                <AlertTriangle className="h-5 w-5 text-yellow-400" />
+                <p className="ml-3 text-sm text-yellow-700">{error}</p>
+              </div>
+            </div>
+          )}
+
+
+          {/* When a patient is selected, show their key details at the top */}
+          {selectedPatient && (
+            <div className="w-full max-w-7xl mb-4 transition-all duration-300 ease-out mx-auto">
+              <div className="transform scale-100 opacity-100 drop-shadow-md">
+                <PatientHeader
+                  patient={selectedPatient}
+                  onOpenMessaging={handleOpenMessaging}
+                />
+              </div>
+            </div>
+          )}
+
+
+          {/* Main responsive grid layout */}
+          <div className="w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-4 lg:gap-6">
+            {/* Left Sidebar - Persistent */}
+            <div className="lg:col-span-1 space-y-6">
+              {/* Patient Actions / Tabs in Sidebar - Show when patient is selected */}
+              {selectedPatient && (
+                <Card className="shadow-xl border-emerald-100/70 bg-white/80 backdrop-blur-sm">
+                  <CardHeader className="bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-500 rounded-t-xl">
+                    <CardTitle className="flex items-center justify-between text-sm font-semibold text-gray-900">
+                      <span className="flex items-center space-x-2">
+                        <span className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center">
+                          <Activity className="w-4 h-4 text-white" />
+                        </span>
+                        <span className="text-white">Patient Actions</span>
+                      </span>
+                      <button
+                        onClick={() => setSelectedPatient(null)}
+                        className="text-xs text-emerald-50 hover:text-white font-medium underline-offset-2 hover:underline"
+                      >
+                        Back to Patients
+                      </button>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4 space-y-2 bg-white/80 rounded-b-xl">
+    {[
+      { id: 'overview', label: 'Overview', icon: Users },
+      { id: 'current-vitals', label: 'Current Vitals', icon: Activity },
+      { id: 'health-trends', label: 'Health Trends', icon: TrendingUp },
+      { id: 'risk-assessment', label: 'Risk Assessment', icon: Shield },
+      { id: 'alerts', label: 'Alerts & Notifications', icon: Bell },
+      { id: 'medications', label: 'Medications', icon: Pill },
+      { id: 'appointments', label: 'Appointments', icon: Calendar },
+      { id: 'messages', label: 'Messages', icon: MessageSquare },
+    ].map((tab) => {
+                      const Icon = tab.icon;
+                      const isActive = activePatientTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => {
+                            setActivePatientTab(tab.id as any);
+                            setFullScreenMode(true);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                            isActive
+                              ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 text-white shadow-md scale-[1.01]'
+                              : 'bg-white/90 text-gray-700 border border-gray-100 hover:border-emerald-300 hover:bg-emerald-50'
+                          }`}
+                        >
+                          <span className="flex items-center space-x-2">
+                            <span
+                              className={`w-6 h-6 rounded-md flex items-center justify-center ${
+                                isActive
+                                  ? 'bg-white/20'
+                                  : 'bg-gradient-to-br from-emerald-50 via-cyan-50 to-blue-50'
+                              }`}
+                            >
+                              <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-emerald-600'}`} />
+                            </span>
+                            <span>{tab.label}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Assigned Patients List in Sidebar - Show when no patient is selected */}
+              {!selectedPatient && (
+                <Card className="shadow-xl border-emerald-100/70 bg-white/80 backdrop-blur-sm">
+                  <CardHeader className="bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 rounded-t-xl">
+                    <CardTitle className="flex items-center justify-between">
+                      <span className="flex items-center space-x-2">
+                        <span className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center">
+                          <Users className="w-4 h-4 text-white" />
+                        </span>
+                        <span className="text-sm font-semibold text-white">Patients</span>
+                      </span>
+                      <span className="text-xs text-emerald-50">
+                        {filteredPatients.length}
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 pt-4 max-h-96 overflow-y-auto bg-white/80 rounded-b-xl">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-3 h-3" />
+                      <Input
+                        type="text"
+                        placeholder="Search..."
+                        className="w-full pl-8 text-xs h-8"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      {(filteredPatients as Patient[]).map((patient) => {
+                        const isSelected = ((selectedPatient as Patient | null)?.id ?? null) === patient.id;
+                        return (
+                          <div
+                            key={patient.id}
+                            className={`p-3 rounded-lg border cursor-pointer transition-all text-xs ${
+                              isSelected
+                                ? 'bg-gradient-to-r from-emerald-50 via-cyan-50 to-blue-50 border-emerald-300 shadow-md'
+                                : 'bg-white border-gray-200 hover:border-emerald-300 hover:bg-emerald-50/40'
+                            }`}
+                            onClick={() => {
+                              handlePatientSelect(patient);
+                              setActivePatientTab('overview');
+                            }}
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold text-gray-900 truncate">{patient.fullName}</h4>
+                              {getStatusIcon(patient.status)}
+                            </div>
+                            
+                            {/* ✅ PATIENT ID DISPLAY - ALWAYS VISIBLE */}
+                            <div className="flex items-center gap-1 mb-1">
+                              <IdCard className="w-3 h-3 text-emerald-600" />
+                              {patient.patientId ? (
+                                <span className="text-[10px] font-mono font-semibold text-emerald-700">
+                                  {patient.patientId}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-gray-400 italic">
+                                  Not Assigned
+                                </span>
+                              )}
+                            </div>
+                            
+                            <div className="flex items-center justify-between text-gray-600">
+                              <span className="truncate">{patient.age}y • {patient.gender}</span>
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${getConditionColor(patient.condition)}`}>
+                                {getConditionIcon(patient.condition)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {filteredPatients.length === 0 && (
+                        <div className="py-6 text-center text-gray-500">
+                          <Users className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                          <p className="text-xs font-medium">No patients found</p>
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+
+            {/* Right Main Content */}
+            <div className="lg:col-span-3 space-y-6">
+              {/* Show assigned patients grid when no patient is selected */}
+              <div className="bg-white/85 backdrop-blur-sm rounded-2xl shadow-2xl border border-emerald-100/60 overflow-hidden">
+                {!selectedPatient ? (
+                  <div className="p-4 sm:p-6">
+                    <AssignedPatientsGrid
+                      patients={filteredPatients}
+                      onPatientSelect={handlePatientSelect}
+                      selectedPatient={selectedPatient}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-4 sm:p-6 bg-gradient-to-b from-white via-white to-emerald-50/40">
+                      <PatientTabs
+                        patient={selectedPatient}
+                        patientVitals={patientVitals}
+                        isLoading={isLoading}
+                        onRefreshVitals={refreshVitals}
+                        onPrescribeMedication={handlePrescribeMedication}
+                        onOpenMessaging={handleOpenMessaging}
+                        activeTab={activePatientTab}
+                        onTabChange={setActivePatientTab}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </main>
+      ) : (
+        // Full Screen Mode - SPA Style
+        <div className="flex min-h-[calc(100vh-80px)]">
+          {/* Persistent Sidebar */}
+          <div className="w-64 lg:w-80 bg-white/90 backdrop-blur-sm border-r border-emerald-100/30 p-4 lg:p-6 shadow-xl">
+            {/* Back to Grid View Button */}
+            <div className="mb-6">
+              <button
+                onClick={() => setFullScreenMode(false)}
+                className="flex items-center space-x-2 text-sm font-medium text-emerald-600 hover:text-emerald-700 transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Back to Overview</span>
+              </button>
+            </div>
+
+            {/* Patient Info Header */}
+            {selectedPatient && (
+              <div className="mb-6 p-4 bg-gradient-to-r from-emerald-50 to-cyan-50 rounded-lg border border-emerald-100">
+                <div className="flex items-center space-x-3">
+                  <div className="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-full flex items-center justify-center">
+                    <User className="w-6 h-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-gray-900">{selectedPatient.fullName}</h3>
+                    
+                    {/* ✅ PATIENT ID DISPLAY - ALWAYS VISIBLE */}
+                    <div className="flex items-center space-x-1 mt-0.5">
+                      <IdCard className="w-3 h-3 text-emerald-600" />
+                      {selectedPatient.patientId ? (
+                        <span className="text-xs font-mono font-semibold text-emerald-700">
+                          {selectedPatient.patientId}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400 italic">
+                          Not Assigned
+                        </span>
+                      )}
+                    </div>
+                    
+                    <p className="text-xs text-gray-600">{selectedPatient.age}y • {selectedPatient.gender}</p>
+                    <div className="flex items-center space-x-2 mt-1">
+                      <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getConditionColor(selectedPatient.condition)}`}>
+                        {getConditionIcon(selectedPatient.condition)}
+                      </span>
+                      <span className="text-xs text-gray-500">Status: {selectedPatient.status}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Navigation Menu */}
+            <div className="space-y-2">
+              {[
+                { id: 'overview', label: 'Overview', icon: Users },
+                { id: 'current-vitals', label: 'Current Vitals', icon: Activity },
+                { id: 'health-trends', label: 'Health Trends', icon: TrendingUp },
+                { id: 'risk-assessment', label: 'Risk Assessment', icon: Shield },
+                { id: 'alerts', label: 'Alerts & Notifications', icon: Bell },
+                { id: 'medications', label: 'Medications', icon: Pill },
+                { id: 'appointments', label: 'Appointments', icon: Calendar },
+                { id: 'messages', label: 'Messages', icon: MessageSquare },
+              ].map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activePatientTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActivePatientTab(tab.id as any)}
+                    className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg text-sm font-medium transition-all ${
+                      isActive
+                        ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 text-white shadow-md'
+                        : 'text-gray-700 hover:bg-emerald-50 hover:text-emerald-700'
+                    }`}
+                  >
+                    <span className={`w-6 h-6 rounded-md flex items-center justify-center ${
+                      isActive ? 'bg-white/20' : 'bg-emerald-100'
+                    }`}>
+                      <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-emerald-600'}`} />
+                    </span>
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Full Screen Content Area */}
+          <div className="flex-1 bg-white/80 backdrop-blur-sm p-4 lg:p-6">
+            <div className="h-full">
+              {selectedPatient ? (
+                <PatientTabs
+                  patient={selectedPatient}
+                  patientVitals={patientVitals}
+                  isLoading={isLoading}
+                  onRefreshVitals={refreshVitals}
+                  onPrescribeMedication={handlePrescribeMedication}
+                  onOpenMessaging={handleOpenMessaging}
+                  activeTab={activePatientTab}
+                  onTabChange={setActivePatientTab}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-gray-500">Please select a patient first</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Medication Prescription Modal */}
+      {showPrescriptionModal && selectedPatientForPrescription && (
+        <MedicationPrescriptionModal
+          patient={selectedPatientForPrescription}
+          isOpen={showPrescriptionModal}
+          onClose={handleClosePrescriptionModal}
+          onPrescribe={handlePrescriptionSuccess}
+        />
+      )}
+    </div>
+  );
+};
+
+export default CaretakerDashboard;

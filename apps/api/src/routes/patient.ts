@@ -1,5 +1,8 @@
+// COMPLETE FIXED patient.ts router with proper ObjectId handling and patientId
+
 import express from "express";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import Patient from "../models/patient";
 import User from "../models/user";
 import { connectMongoDB } from "../lib/mongodb";
@@ -23,12 +26,24 @@ const authenticateUser = (req: any, res: any, next: any) => {
     req.userId = decoded.userId;
     req.userEmail = decoded.email;
 
-    console.log("✅ Authenticated user:", decoded.userId);
+    
     next();
   } catch (error) {
-    console.error("❌ Token verification failed:", error);
+    console.error(" Token verification failed:", error);
     return res.status(401).json({ message: "Invalid token" });
   }
+};
+
+// Helper function to convert userId to ObjectId
+const toObjectId = (userId: any) => {
+  try {
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      return new mongoose.Types.ObjectId(userId);
+    }
+  } catch (e) {
+    console.error("ObjectId conversion failed:", e);
+  }
+  return userId;
 };
 
 // Get the authenticated user's patient profile
@@ -36,13 +51,29 @@ router.get("/me", authenticateUser, async (req: any, res: any) => {
   try {
     await connectMongoDB();
 
-    console.log("🔍 Fetching profile for userId:", req.userId);
+   
 
-    // Try to get Patient document first
-    let patient = await Patient.findOne({ userId: req.userId }).sort({ createdAt: -1 });
+    // Convert userId to ObjectId for consistent querying
+    const userIdObj = toObjectId(req.userId);
     
+
+    // Try to get Patient document with ObjectId
+    let patient = await Patient.findOne({ userId: userIdObj }).sort({ createdAt: -1 });
+    
+    // ✅ ALWAYS fetch User to get patientId
+    const user = await User.findById(userIdObj);
+    
+    if (!user) {
+      console.log("❌ User not found");
+      return res.status(404).json({ 
+        success: false,
+        message: "User not found",
+        code: "USER_NOT_FOUND"
+      });
+    }
+
     if (patient) {
-      console.log("✅ Patient profile found:", patient._id);
+      console.log("✅ Returning Patient data with patientId:", user.patientId);
       return res.status(200).json({ 
         success: true,
         data: {
@@ -51,6 +82,7 @@ router.get("/me", authenticateUser, async (req: any, res: any) => {
           fullName: patient.fullName,
           firstname: patient.firstname,
           lastname: patient.lastname,
+          email: patient.email,
           dob: patient.dob,
           gender: patient.gender,
           weight: patient.weight,
@@ -63,27 +95,18 @@ router.get("/me", authenticateUser, async (req: any, res: any) => {
           cardiovascular: patient.cardiovascular,
           allergies: patient.allergies,
           surgeries: patient.surgeries,
-          createdAt: patient.createdAt
+          location: patient.location,
+          createdAt: patient.createdAt,
+          patientId: user.patientId || null // ✅ ADD patientId from User
         }
       });
     }
 
-    // If no Patient document, try to get data from User
-    console.log("⚠️ No Patient document found, checking User...");
-    const user = await User.findById(req.userId);
-    
-    if (!user) {
-      console.log("❌ User not found");
-      return res.status(404).json({ 
-        success: false,
-        message: "User not found",
-        code: "USER_NOT_FOUND"
-      });
-    }
+    // If no Patient document exists
 
     // Check if user has profile data
     if (!user.profileCompleted) {
-      console.log("⚠️ User profile not completed");
+      console.log("❌ Profile not completed");
       return res.status(404).json({ 
         success: false,
         message: "Profile not completed. Please complete your profile.",
@@ -91,7 +114,7 @@ router.get("/me", authenticateUser, async (req: any, res: any) => {
       });
     }
 
-    console.log("✅ Returning User data as fallback");
+    console.log("✅ Returning User data with patientId:", user.patientId);
     
     // Return User data in Patient format
     return res.status(200).json({ 
@@ -99,9 +122,10 @@ router.get("/me", authenticateUser, async (req: any, res: any) => {
       data: {
         _id: user._id,
         userId: user._id,
-        fullName: user.fullName || `${user.firstname} ${user.lastname}`,
-        firstname: user.firstname,
-        lastname: user.lastname,
+        fullName: user.fullName || `${user.firstName} ${user.lastName}`,
+        firstname: user.firstName || user.firstname,
+        lastname: user.lastName || user.lastname,
+        email: user.email,
         dob: user.dob,
         gender: user.gender,
         weight: user.weight,
@@ -114,17 +138,20 @@ router.get("/me", authenticateUser, async (req: any, res: any) => {
         cardiovascular: user.cardiovascular || false,
         allergies: user.allergies || "",
         surgeries: user.surgeries || "",
-        createdAt: user.createdAt
+        location: null,
+        createdAt: user.createdAt,
+        patientId: user.patientId || null // ✅ ADD patientId from User
       },
-      source: "user" // Indicate this came from User model
+      source: "user"
     });
 
   } catch (error) {
-    console.error("❌ Fetch patient error:", error);
+    console.error(" Fetch patient error:", error);
     res.status(500).json({ 
       success: false,
       message: "Failed to fetch patient profile",
-      code: "SERVER_ERROR"
+      code: "SERVER_ERROR",
+      error: process.env.NODE_ENV === "development" ? String(error) : undefined
     });
   }
 });
@@ -134,20 +161,31 @@ router.get("/debug", authenticateUser, async (req: any, res: any) => {
   try {
     await connectMongoDB();
 
-    const patient = await Patient.findOne({ userId: req.userId }).sort({ createdAt: -1 });
-    const user = await User.findById(req.userId);
+    const userIdObj = toObjectId(req.userId);
+
+    const patient = await Patient.findOne({ userId: userIdObj }).sort({ createdAt: -1 });
+    const user = await User.findById(userIdObj);
+
+    // Also check if there are ANY patients with string userId
+    const patientWithString = await Patient.findOne({ userId: req.userId }).sort({ createdAt: -1 });
 
     res.status(200).json({
       success: true,
       debug: {
         userId: req.userId,
+        userIdType: typeof req.userId,
+        convertedUserId: userIdObj,
         patientExists: !!patient,
+        patientWithStringExists: !!patientWithString,
         userExists: !!user,
         patientData: patient || null,
+        patientWithStringData: patientWithString || null,
         userData: user ? {
           _id: user._id,
           email: user.email,
           fullName: user.fullName,
+          firstName: user.firstName,
+          lastName: user.lastName,
           firstname: user.firstname,
           lastname: user.lastname,
           profileCompleted: user.profileCompleted,
@@ -158,25 +196,26 @@ router.get("/debug", authenticateUser, async (req: any, res: any) => {
           height: user.height,
           diabetes: user.diabetes,
           hypertension: user.hypertension,
-          cardiovascular: user.cardiovascular
+          cardiovascular: user.cardiovascular,
+          patientId: user.patientId // ✅ ADD patientId to debug
         } : null
       }
     });
   } catch (error) {
-    console.error("❌ Debug error:", error);
-    res.status(500).json({ success: false, message: "Debug failed" });
+    console.error(" Debug error:", error);
+    res.status(500).json({ success: false, message: "Debug failed", error: String(error) });
   }
 });
 
+// Create patient profile
 router.post("/", authenticateUser, async (req: any, res: any) => {
   try {
     await connectMongoDB();
 
-    console.log("=== PROFILE SAVE DEBUG ===");
-    console.log("Authenticated userId:", req.userId);
-    console.log("Request body:", req.body);
-
     const body = req.body;
+
+    // Convert userId to ObjectId
+    const userIdObj = toObjectId(req.userId);
 
     // Create selectedDiseases array
     const selectedDiseases: string[] = [];
@@ -190,26 +229,29 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       selectedDiseases.push("cardiovascular");
     }
 
-    console.log("🏥 Extracted diseases:", selectedDiseases);
+   
 
-    // Save to Patient model
+    // Save to Patient model with ObjectId
     const patientData = {
       ...body,
-      userId: req.userId,
+      userId: userIdObj, // Use ObjectId here
       selectedDiseases,
       diabetes: body.diabetes === true || body.diabetes === "true",
       hypertension: body.hypertension === true || body.hypertension === "true",
-      cardiovascular:
-        body.cardiovascular === true || body.cardiovascular === "true",
+      cardiovascular: body.cardiovascular === true || body.cardiovascular === "true",
+      email: body.email || null,
+      location: body.location || null
     };
 
     const newPatient = new Patient(patientData);
     const savedPatient = await newPatient.save();
-    console.log("✅ Patient saved:", savedPatient._id);
+    
 
-    // Update User record
+    // Update User record with ObjectId
     const userUpdateData = {
       fullName: body.fullName,
+      firstName: body.firstname,
+      lastName: body.lastname,
       firstname: body.firstname,
       lastname: body.lastname,
       phoneNumber: body.phoneNumber,
@@ -221,8 +263,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
 
       diabetes: body.diabetes === true || body.diabetes === "true",
       hypertension: body.hypertension === true || body.hypertension === "true",
-      cardiovascular:
-        body.cardiovascular === true || body.cardiovascular === "true",
+      cardiovascular: body.cardiovascular === true || body.cardiovascular === "true",
 
       allergies: body.allergies || "",
       surgeries: body.surgeries || "",
@@ -235,7 +276,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
     };
 
     const updatedUser = await User.findByIdAndUpdate(
-      req.userId,
+      userIdObj, // Use ObjectId here
       userUpdateData,
       { new: true }
     );
@@ -244,14 +285,12 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    console.log("✅ User updated successfully");
-
     // Generate new JWT
     const newToken = jwt.sign(
       {
-        userId: updatedUser._id,
+        userId: updatedUser._id.toString(),
         email: updatedUser.email,
-        name: `${updatedUser.firstname} ${updatedUser.lastname}`,
+        name: `${updatedUser.firstName || updatedUser.firstname} ${updatedUser.lastName || updatedUser.lastname}`,
         status: "complete",
         disease: selectedDiseases,
         isFirstLogin: false,
@@ -277,7 +316,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       }
     }
 
-    console.log("🚀 Redirecting to:", redirectTo);
+    
 
     res.status(201).json({
       success: true,
@@ -286,7 +325,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       user: {
         id: updatedUser._id,
         email: updatedUser.email,
-        name: `${updatedUser.firstname} ${updatedUser.lastname}`,
+        name: `${updatedUser.firstName || updatedUser.firstname} ${updatedUser.lastName || updatedUser.lastname}`,
         profileCompleted: true,
         selectedDiseases,
       },
@@ -294,7 +333,7 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
       redirectTo,
     });
   } catch (error) {
-    console.error("❌ Profile save error:", error);
+    console.error("Profile save error:", error);
 
     let details: string | undefined;
     if (error instanceof Error) {
@@ -308,9 +347,12 @@ router.post("/", authenticateUser, async (req: any, res: any) => {
   }
 });
 
+// Update patient profile
 router.put("/", authenticateUser, async (req: any, res: any) => {
   try {
     await connectMongoDB();
+
+    const userIdObj = toObjectId(req.userId);
 
     const updatableFields = [
       "fullName",
@@ -321,6 +363,7 @@ router.put("/", authenticateUser, async (req: any, res: any) => {
       "picture",
       "firstname",
       "lastname",
+      "email",
       "phoneNumber",
       "relationship",
       "diabetes",
@@ -328,6 +371,7 @@ router.put("/", authenticateUser, async (req: any, res: any) => {
       "cardiovascular",
       "allergies",
       "surgeries",
+      "location",
     ];
 
     const update: any = {};
@@ -338,10 +382,11 @@ router.put("/", authenticateUser, async (req: any, res: any) => {
     }
 
     if (update.dob) update.dob = new Date(update.dob);
+    if (update.location) update.location.updatedAt = new Date();
 
     const patient = await Patient.findOneAndUpdate(
-      { userId: req.userId },
-      { $set: update, $setOnInsert: { userId: req.userId } },
+      { userId: userIdObj },
+      { $set: update, $setOnInsert: { userId: userIdObj } },
       { new: true, upsert: true }
     );
 
@@ -355,8 +400,13 @@ router.put("/", authenticateUser, async (req: any, res: any) => {
       for (const field of ["weight", "height", "firstname", "lastname", "fullName", "phoneNumber", "dob", "gender", "diabetes", "hypertension", "cardiovascular", "allergies", "surgeries"]) {
         if (update[field] !== undefined) userUpdate[field] = update[field];
       }
+      
+      // Also update firstName/lastName for consistency
+      if (update.firstname) userUpdate.firstName = update.firstname;
+      if (update.lastname) userUpdate.lastName = update.lastname;
+      
       userUpdate.profileCompleted = true;
-      await User.findByIdAndUpdate(req.userId, userUpdate, { new: true });
+      await User.findByIdAndUpdate(userIdObj, userUpdate, { new: true });
     } catch (e) {
       console.warn("Non-critical: failed to mirror fields to User", e);
     }
@@ -387,13 +437,116 @@ router.put("/", authenticateUser, async (req: any, res: any) => {
       success: true,
       message: "Patient profile updated",
       data: patient,
-      redirectTo, // ✅ return redirect
+      redirectTo,
     });
   } catch (error) {
-    console.error("❌ Update patient error:", error);
+    console.error("Update patient error:", error);
     res.status(500).json({ message: "Failed to update patient profile" });
   }
 });
 
+
+// Update patient location
+router.put("/location", authenticateUser, async (req: any, res: any) => {
+  try {
+    await connectMongoDB();
+
+    const { lat, lng, address } = req.body;
+    const userIdObj = toObjectId(req.userId);
+
+    // Validate coordinates
+    if (!lat || !lng) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Latitude and longitude are required" 
+      });
+    }
+
+    // Validate coordinate ranges
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Invalid coordinates" 
+      });
+    }
+
+  
+    // Update patient location
+    const patient = await Patient.findOneAndUpdate(
+      { userId: userIdObj },
+      { 
+        $set: { 
+          location: {
+            lat,
+            lng,
+            address: address || "Address not provided",
+            updatedAt: new Date()
+          }
+        } 
+      },
+      { new: true }
+    );
+
+    if (!patient) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Patient profile not found. Please complete your profile first." 
+      });
+    }
+
+    
+
+    res.status(200).json({
+      success: true,
+      message: "Location updated successfully",
+      data: {
+        location: patient.location
+      }
+    });
+  } catch (error) {
+    console.error("Location update error:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to update location" 
+    });
+  }
+});
+
+// Get patient location
+router.get("/location", authenticateUser, async (req: any, res: any) => {
+  try {
+    await connectMongoDB();
+
+    const userIdObj = toObjectId(req.userId);
+    const patient = await Patient.findOne({ userId: userIdObj });
+
+    if (!patient) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Patient profile not found" 
+      });
+    }
+
+    if (!patient.location) {
+      return res.status(404).json({ 
+        success: false,
+        message: "Location not set. Please update your location." 
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        location: patient.location
+      }
+    });
+  } catch (error) {
+    console.error(" Get location error:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Failed to fetch location" 
+    });
+  }
+});
 
 export default router;
